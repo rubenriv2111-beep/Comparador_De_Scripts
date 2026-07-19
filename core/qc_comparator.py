@@ -7,6 +7,7 @@ import openpyxl
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 from openpyxl.utils import get_column_letter
 from core.lectores import leer_sps_rps, detectar_tipo_sps_rps, ENCABEZADOS_RPS, ENCABEZADOS_SPS, ENCABEZADOS_XPS, COLUMNAS_RPS, COLUMNAS_XPS, leer_xps_completo
+from core.comparador_disparos import run_comparison
 
 def aplicar_estilo_hoja(ws, color_encabezado, es_diferencias=False):
     """Aplica diseño estético y legibilidad a la hoja usando openpyxl."""
@@ -165,6 +166,11 @@ def comparar_carpetas(lista_carpetas, progreso=None):
                 'rps': os.path.basename(rps_path) if rps_path else None,
                 'sps': os.path.basename(sps_path) if sps_path else None,
                 'xps': os.path.basename(xps_path) if xps_path else None
+            },
+            'rutas': {
+                'rps': rps_path,
+                'sps': sps_path,
+                'xps': xps_path
             }
         }
     
@@ -175,6 +181,7 @@ def comparar_carpetas(lista_carpetas, progreso=None):
     
     # Comparar paquetes consecutivos
     diferencias = {'RPS': [], 'SPS': [], 'XPS': []}
+    xps_comparaciones = []
     
     for i in range(len(carpetas_ordenadas)-1):
         nombre_base = carpetas_ordenadas[i]
@@ -206,7 +213,21 @@ def comparar_carpetas(lista_carpetas, progreso=None):
                 df_diff.insert(1, 'Paquete Nuevo', new_name)
                 diferencias['SPS'].append(df_diff)
         
-        # XPS
+        # XPS (Lógica superior del comparador)
+        xps_path_base = paquetes[base_name]['rutas']['xps']
+        xps_path_nuevo = paquetes[new_name]['rutas']['xps']
+        if xps_path_base and xps_path_nuevo:
+            try:
+                cmp_res = run_comparison(xps_path_base, xps_path_nuevo)
+                xps_comparaciones.append({
+                    'par': f"{base_name} vs {new_name}",
+                    'resultado': cmp_res
+                })
+            except Exception as e:
+                print(f"Error al comparar XPS {base_name} vs {new_name}: {e}")
+                
+        # Mantener diferencias XPS antiguas para compatibilidad interna si fuera necesario,
+        # pero ahora la exportación a Excel usará la lógica superior.
         df_base = paquetes[base_name]['xps']
         df_nuevo = paquetes[new_name]['xps']
         if not df_base.empty or not df_nuevo.empty:
@@ -226,10 +247,10 @@ def comparar_carpetas(lista_carpetas, progreso=None):
     if progreso:
         progreso.actualizar(90, "Generando Excel con datos originales y diferencias...")
     
-    # Exportar a Excel incluyendo datos originales con encabezados descriptivos
-    exportar_excel_completo(paquetes, diferencias_final)
+    # Exportar a Excel incluyendo datos originales con encabezados descriptivos y comparativas XPS
+    exportar_excel_completo(paquetes, diferencias_final, xps_comparaciones)
     
-    return {'diferencias': diferencias_final, 'paquetes': paquetes}
+    return {'diferencias': diferencias_final, 'paquetes': paquetes, 'xps_comparaciones': xps_comparaciones}
 
 def comparar_sin_merge(df_base, df_nuevo, key_cols, coord_cols=None):
     """
@@ -317,7 +338,7 @@ def comparar_sin_merge(df_base, df_nuevo, key_cols, coord_cols=None):
         return pd.DataFrame()
     return pd.DataFrame(diferencias)
 
-def exportar_excel_completo(paquetes, diferencias, nombre_salida="comparacion_paquetes.xlsx"):
+def exportar_excel_completo(paquetes, diferencias, xps_comparaciones=None, nombre_salida="comparacion_paquetes.xlsx"):
     """Exporta a Excel: resumen, datos originales de cada paquete (con encabezados descriptivos) y diferencias."""
     # Si el archivo está abierto, agregar un número al nombre
     base, ext = os.path.splitext(nombre_salida)
@@ -415,20 +436,8 @@ def exportar_excel_completo(paquetes, diferencias, nombre_salida="comparacion_pa
                             'elevacion_base': 'Elevación Base (66-71)',
                             'elevacion_nuevo': 'Elevación Nuevo (66-71)'
                         }
-                    elif tipo == 'XPS':
-                        sheet_name = 'Diferencias XPS'
-                        rename_map = {
-                            'Paquete Base': 'Paquete Base',
-                            'Paquete Nuevo': 'Paquete Nuevo',
-                            'Tipo de Cambio': 'Tipo de Cambio',
-                            'linea_f': 'Línea Fuente (18-27)',
-                            'punto_f': 'Punto Fuente (28-37)',
-                            'linea_r': 'Línea Receptora (48-57)',
-                            'desde': 'Desde Geófono (58-67)',
-                            'hasta': 'Hasta Geófono (68-77)'
-                        }
                     else:
-                        continue
+                        continue  # El XPS se maneja con la lógica estructural superior abajo
                     
                     if not df.empty:
                         df_renamed = df.rename(columns=rename_map)
@@ -437,6 +446,11 @@ def exportar_excel_completo(paquetes, diferencias, nombre_salida="comparacion_pa
                         df_renamed = df_renamed[cols]
                         df_renamed.to_excel(writer, sheet_name=sheet_name, index=False)
                         aplicar_estilo_hoja(writer.sheets[sheet_name], 'C00000', es_diferencias=True)
+                
+                # Escribir comparativas estructurales de XPS usando la lógica superior
+                if xps_comparaciones:
+                    escribir_hojas_comparativa_xps(writer, xps_comparaciones)
+                
                 break  # salir del while si se pudo escribir
         except PermissionError:
             # Si está abierto, cambiar nombre
@@ -446,3 +460,162 @@ def exportar_excel_completo(paquetes, diferencias, nombre_salida="comparacion_pa
                 raise RuntimeError("No se puede escribir el archivo Excel. Cierra el archivo abierto.")
     
     print(f" Excel generado: {nombre_final}")
+
+def escribir_hojas_comparativa_xps(writer, xps_comparaciones):
+    """
+    Escribe los resultados de comparación de XPS (del comparador superior) al Excel.
+    Genera dos hojas:
+      - QC_XPS_Comp_Completa
+      - QC_XPS_Diferencias
+    """
+    if not xps_comparaciones:
+        return
+        
+    wb = writer.book
+    
+    # Colores y estilos inspirados en comparador_xps.py
+    HEX = {
+        "ok_bg":    "C8EDD6", "ok_fg":    "1B5E35",
+        "diff_bg":  "FDECC8", "diff_fg":  "7B4D00",
+        "only1_bg": "D0E8FB", "only1_fg": "0C3D6E",
+        "only2_bg": "E8DFFB", "only2_fg": "3D1E87",
+        "hdr_bg":   "2C3E50", "hdr_fg":   "FFFFFF",
+        "alt_bg":   "F7F6F3", "white":    "FFFFFF",
+        "border":   "BDB8AD",
+        "miss_bg":  "FFB347", "miss_fg": "7A3500",
+    }
+    
+    STATUS_STYLE = {
+        "ok":    ("ok_bg",    "ok_fg"),
+        "diff":  ("diff_bg",  "diff_fg"),
+        "only1": ("only1_bg", "only1_fg"),
+        "only2": ("only2_bg", "only2_fg"),
+    }
+    LINE_MISS_STYLE = ("miss_bg", "miss_fg")
+    STATUS_LABEL = {
+        "ok":    "✔ Idéntico",
+        "diff":  "⚠ Con diferencias",
+        "only1": "✖ Solo en Archivo 1",
+        "only2": "✖ Solo en Archivo 2",
+    }
+    
+    _side = Side(style="thin", color=HEX["border"])
+    _border = Border(left=_side, right=_side, top=_side, bottom=_side)
+    
+    def _fill(h):  return PatternFill("solid", fgColor=h)
+    def _font(h, bold=False, sz=10):
+        return Font(color=h, bold=bold, size=sz, name="Calibri")
+    def _center(): return Alignment(horizontal="center", vertical="center", wrap_text=True)
+    def _left():   return Alignment(horizontal="left",   vertical="center", wrap_text=True)
+    
+    def apply_style(cell, bg=None, fg="1A1917", bold=False, align=None, sz=10):
+        if bg: cell.fill = _fill(bg)
+        cell.font      = _font(fg, bold=bold, sz=sz)
+        cell.alignment = align or _left()
+        cell.border    = _border
+        
+    def fmt_estacas(lst):
+        if not lst: return "—"
+        def _n(x):
+            try: return float(x)
+            except: return 0
+        ini = min((e[0] for e in lst), key=_n)
+        fin = max((e[1] for e in lst), key=_n)
+        return f"{ini} → {fin}" if len(lst) == 1 else f"{ini} → {fin}  ({len(lst)} rangos)"
+
+    HEADERS = ["COMPARATIVA", "DISPARO", "ESTADO DISPARO", "LÍNEA",
+               "ESTACAS ARCHIVO 1", "ESTACAS ARCHIVO 2",
+               "ESTADO LÍNEA", "DIFERENCIAS DE ESTACAS"]
+               
+    for sheet_name, only_diffs in [("QC_XPS_Comp_Completa", False), ("QC_XPS_Diferencias", True)]:
+        ws = wb.create_sheet(sheet_name)
+        ws.row_dimensions[1].height = 24
+        ws.append(HEADERS)
+        for col, h in enumerate(HEADERS, 1):
+            apply_style(ws.cell(1, col), bg=HEX["hdr_bg"], fg=HEX["hdr_fg"],
+                        bold=True, align=_center(), sz=10)
+        ws.freeze_panes = "A2"
+        ws.sheet_view.showGridLines = True
+        
+        alt = False
+        row_count = 1
+        
+        for cmp in xps_comparaciones:
+            par_name = cmp['par']
+            result = cmp['resultado']
+            
+            for shot in result["results"]:
+                s = shot["status"]
+                if only_diffs and s == "ok":
+                    continue
+                bg_k, fg_k = STATUS_STYLE.get(s, ("alt_bg", "1A1917"))
+                d_bg, d_fg = HEX[bg_k], HEX[fg_k]
+                d_lbl = STATUS_LABEL.get(s, s)
+                
+                if s in ("only1", "only2"):
+                    row_vals = [par_name, shot["disparo"], d_lbl, "—", "—", "—", "—", ""]
+                    ws.append(row_vals)
+                    r = ws.max_row
+                    ws.row_dimensions[r].height = 18
+                    for col, val in enumerate(row_vals, 1):
+                        apply_style(ws.cell(r, col), bg=d_bg, fg=d_fg,
+                                    bold=(col <= 3), align=_center() if col != 8 else _left())
+                    row_count += 1
+                    continue
+                    
+                for lr in shot["lineas"]:
+                    ls = lr["status"]
+                    if only_diffs and ls == "ok":
+                        continue
+                    if ls in ("only1", "only2"):
+                        ls_bk, ls_fk = LINE_MISS_STYLE
+                    else:
+                        ls_bk, ls_fk = STATUS_STYLE.get(ls, ("alt_bg", "1A1917"))
+                    l_bg, l_fg = HEX[ls_bk], HEX[ls_fk]
+                    l_lbl = STATUS_LABEL.get(ls, ls)
+                    
+                    e1 = fmt_estacas(lr["estacas1"]) if lr["estacas1"] else "—"
+                    e2 = fmt_estacas(lr["estacas2"]) if lr["estacas2"] else "—"
+                    parts = []
+                    for ed in lr["estaca_diffs"]:
+                        a = "Arch.1" if ed["tipo"] == "solo_arch1" else "Arch.2"
+                        parts.append(f"Solo {a}: {ed['ini']}→{ed['fin']}")
+                    diffs_txt = "  |  ".join(parts)
+                    
+                    alt = not alt
+                    row_bg = HEX["alt_bg"] if alt else HEX["white"]
+                    row_vals = [par_name, shot["disparo"], d_lbl, lr["linea"],
+                                e1, e2, l_lbl, diffs_txt]
+                                
+                    ws.append(row_vals)
+                    r = ws.max_row
+                    ws.row_dimensions[r].height = 18
+                    
+                    if ls in ("only1", "only2"):
+                        for col in range(1, 9):
+                            apply_style(ws.cell(r, col), bg=l_bg, fg=l_fg,
+                                        bold=(col <= 4), align=_center() if col != 8 else _left())
+                    else:
+                        apply_style(ws.cell(r, 1), bg=row_bg,                                   align=_center())
+                        apply_style(ws.cell(r, 2), bg=d_bg,    fg=d_fg,        bold=True,         align=_center())
+                        apply_style(ws.cell(r, 3), bg=d_bg,    fg=d_fg,        bold=True,         align=_center())
+                        apply_style(ws.cell(r, 4), bg=l_bg,    fg=l_fg,        bold=True,         align=_center())
+                        apply_style(ws.cell(r, 5), bg=row_bg,                                     align=_center())
+                        apply_style(ws.cell(r, 6), bg=row_bg,                                     align=_center())
+                        apply_style(ws.cell(r, 7), bg=l_bg,    fg=l_fg,        bold=(ls != "ok"), align=_center())
+                        d_cell_bg = HEX["diff_bg"] if diffs_txt else row_bg
+                        d_cell_fg = HEX["diff_fg"] if diffs_txt else "1A1917"
+                        apply_style(ws.cell(r, 8), bg=d_cell_bg, fg=d_cell_fg,
+                                    bold=bool(diffs_txt), align=_left())
+                    row_count += 1
+                    
+        # Auto-ajustar anchos usando las primeras 200 filas
+        filas_muestra = min(ws.max_row, 200)
+        for col_idx in range(1, len(HEADERS) + 1):
+            max_len = 0
+            col_letter = get_column_letter(col_idx)
+            for r_idx in range(1, filas_muestra + 1):
+                val = ws.cell(row=r_idx, column=col_idx).value
+                if val is not None:
+                    max_len = max(max_len, len(str(val)))
+            ws.column_dimensions[col_letter].width = min(max(max_len + 4, 12), 40)
