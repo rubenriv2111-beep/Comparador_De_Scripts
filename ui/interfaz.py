@@ -13,9 +13,10 @@ from datetime import datetime
 import pandas as pd
 
 from core.generador_mapa import generar_mapa_completo
-from core.qc_comparator import comparar_carpetas
+from core.qc_comparator import comparar_carpetas, comparar_sin_merge, aplicar_estilo_hoja
 from utils.progreso import Progreso
 from core.comparador_disparos import run_comparison, export_xlsx, export_txt, export_comparativa
+from core.lectores import leer_sps_rps
 
 # Configuración inicial del tema CustomTkinter
 ctk.set_appearance_mode("Light")
@@ -69,7 +70,6 @@ COL_DISP  = 130
 def crear_icono_diseno(tipo, color_hex="#FFFFFF"):
     """
     Dibuja iconos vectoriales minimalistas en un lienzo transparente usando PIL.
-    Evita la necesidad de dependencias de internet o archivos externos.
     """
     h = color_hex.lstrip('#')
     color_rgb = tuple(int(h[i:i+2], 16) for i in (0, 2, 4))
@@ -83,11 +83,11 @@ def crear_icono_diseno(tipo, color_hex="#FFFFFF"):
         draw.rectangle([9, 6, 13, 20], fill=color_rgb)
         draw.rectangle([15, 10, 19, 20], fill=color_rgb)
     elif tipo == "comparador":
-        # Dos páginas superpuestas con flechas o líneas
+        # Dos páginas superpuestas
         draw.rectangle([4, 4, 13, 15], outline=color_rgb, width=2)
         draw.rectangle([11, 9, 20, 20], outline=color_rgb, width=2)
     elif tipo == "mapas":
-        # Globo con retícula o brújula
+        # Globo con retícula
         draw.ellipse([3, 3, 20, 20], outline=color_rgb, width=2)
         draw.line([3, 11, 20, 11], fill=color_rgb, width=2)
         draw.line([11, 3, 11, 20], fill=color_rgb, width=2)
@@ -106,8 +106,13 @@ def crear_icono_diseno(tipo, color_hex="#FFFFFF"):
         # Carpeta abierta
         draw.polygon([(3,6), (8,6), (10,8), (20,8), (20,19), (3,19)], outline=color_rgb, fill=None)
     elif tipo == "file":
-        # Archivo con esquina doblada
+        # Archivo
         draw.polygon([(4,3), (15,3), (20,8), (20,20), (4,20)], outline=color_rgb, fill=None)
+    elif tipo == "lupita":
+        # Lente de la lupa (círculo)
+        draw.ellipse([4, 4, 14, 14], outline=color_rgb, width=2)
+        # Mango de la lupa (línea)
+        draw.line([12, 12, 19, 19], fill=color_rgb, width=3)
     else:
         # Por defecto un cuadro
         draw.rectangle([4, 4, 19, 19], outline=color_rgb, width=2)
@@ -162,11 +167,46 @@ class CTkFileSelector(ctk.CTkFrame):
         self.entry_path.delete(0, tk.END)
 
 
-# ─── Lista de Carpetas Moderna (Estilo Listbox Avanzado) ─────────────────────
-class CTkFolderList(ctk.CTkScrollableFrame):
-    def __init__(self, parent, **kw):
+# ─── Selector de Carpetas Moderno (QC) ─────────────────────────────────────────
+class CTkFolderSelector(ctk.CTkFrame):
+    def __init__(self, parent, label, callback_add=None, **kw):
+        super().__init__(parent, fg_color="transparent", **kw)
+        self._label = label
+        self._callback = callback_add
+        self._build()
+
+    def _build(self):
+        self.columnconfigure(0, weight=1)
+        
+        self.lbl_title = ctk.CTkLabel(self, text=self._label, font=FONT_BOLD, anchor="w")
+        self.lbl_title.grid(row=0, column=0, sticky="w", pady=(0, 2))
+        
+        self.entry_path = ctk.CTkEntry(self, placeholder_text="No se ha seleccionado ninguna carpeta...", 
+                                      font=FONT_SM, height=32)
+        self.entry_path.grid(row=1, column=0, sticky="ew", padx=(0, 8))
+        
+        icon_folder = crear_icono_diseno("folder", "#FFFFFF")
+        self.btn_select = ctk.CTkButton(self, text="Agregar", font=FONT_BOLD, width=95, height=32, 
+                                        fg_color=COLORS["accent"], hover_color=COLORS["accent_hover"],
+                                        image=icon_folder, command=self._pick)
+        self.btn_select.grid(row=1, column=1, sticky="e")
+
+    def _pick(self):
+        p = filedialog.askdirectory(title="Selecciona la carpeta diaria del paquete sísmico")
+        if not p:
+            return
+        self.entry_path.delete(0, tk.END)
+        self.entry_path.insert(0, p)
+        if self._callback:
+            self._callback(p)
+
+
+# ─── Lista de Rutas Moderna (Estilo Listbox Avanzado) ─────────────────────────
+class CTkPathList(ctk.CTkScrollableFrame):
+    def __init__(self, parent, placeholder="No hay elementos agregados.", **kw):
         super().__init__(parent, fg_color="transparent", corner_radius=6, border_width=1, **kw)
-        self.folders = []
+        self.paths = []
+        self.placeholder = placeholder
         self._update_colors()
         self.render()
 
@@ -177,32 +217,44 @@ class CTkFolderList(ctk.CTkScrollableFrame):
         else:
             self.configure(border_color=COLORS["border_light"])
 
-    def add_folder(self, path):
-        if path and path not in self.folders:
-            self.folders.append(path)
+    def add_path(self, path):
+        if path and path not in self.paths:
+            self.paths.append(path)
             self.render()
 
-    def remove_folder(self, path):
-        if path in self.folders:
-            self.folders.remove(path)
+    def add_folder(self, path): 
+        # Alias para compatibilidad
+        self.add_path(path)
+
+    def remove_path(self, path):
+        if path in self.paths:
+            self.paths.remove(path)
             self.render()
+
+    def remove_folder(self, path): 
+        # Alias para compatibilidad
+        self.remove_path(path)
+
+    @property
+    def folders(self): 
+        # Alias para compatibilidad
+        return self.paths
 
     def clear(self):
-        self.folders = []
+        self.paths = []
         self.render()
 
     def render(self):
-        # Limpiar hijos
         for w in self.winfo_children():
             w.destroy()
             
-        if not self.folders:
-            lbl_empty = ctk.CTkLabel(self, text="No hay carpetas agregadas a la cola de comparación.", 
+        if not self.paths:
+            lbl_empty = ctk.CTkLabel(self, text=self.placeholder, 
                                      font=FONT_SM, text_color=COLORS["muted_light"])
             lbl_empty.pack(pady=35, expand=True)
             return
 
-        for idx, path in enumerate(self.folders):
+        for idx, path in enumerate(self.paths):
             row_bg = COLORS["bg_light"] if ctk.get_appearance_mode() == "Light" else COLORS["surface_dark"]
             row = ctk.CTkFrame(self, fg_color=row_bg, corner_radius=6, height=36)
             row.pack(fill="x", pady=2, padx=2)
@@ -211,7 +263,9 @@ class CTkFolderList(ctk.CTkScrollableFrame):
             lbl_num = ctk.CTkLabel(row, text=f"  {idx+1}.  ", font=FONT_BOLD, text_color=COLORS["accent"])
             lbl_num.pack(side="left")
             
-            lbl_path = ctk.CTkLabel(row, text=path, font=FONT_MONO, anchor="w")
+            # Mostrar solo el nombre del archivo si es archivo, o la ruta completa si es carpeta
+            display_text = os.path.basename(path) if os.path.isfile(path) else path
+            lbl_path = ctk.CTkLabel(row, text=display_text, font=FONT_MONO, anchor="w")
             lbl_path.pack(side="left", fill="x", expand=True, padx=4)
             
             btn_del = ctk.CTkButton(
@@ -219,7 +273,7 @@ class CTkFolderList(ctk.CTkScrollableFrame):
                 fg_color="transparent", hover_color="#EF4444" if ctk.get_appearance_mode()=="Light" else "#7F1D1D", 
                 text_color="#EF4444",
                 font=("Segoe UI", 11, "bold"),
-                command=functools.partial(self.remove_folder, path)
+                command=functools.partial(self.remove_path, path)
             )
             btn_del.pack(side="right", padx=6)
 
@@ -258,188 +312,31 @@ class CTkKPICard(ctk.CTkFrame):
             self.lbl_val.configure(text_color=color)
 
 
-# ─── Fila de Disparo Expandible para Listado ──────────────────────────────────
-class CTkDisparoRow(ctk.CTkFrame):
-    def __init__(self, parent, r: dict, **kw):
-        super().__init__(parent, corner_radius=6, **kw)
-        self._r = r
-        self._open = False
-        self._detail = None
-        self._build_header()
-
-    def _meta(self):
-        meta_dict = {
-            "ok":    ("Idéntico",          "ok_row",    "ok_txt"),
-            "diff":  ("Con diferencias",   "diff_row",  "diff_txt"),
-            "only1": ("Solo en Archivo 1", "only1_row", "only1_txt"),
-            "only2": ("Solo en Archivo 2", "only2_row", "only2_txt"),
-        }
-        return meta_dict.get(self._r["status"], meta_dict["diff"])
-
-    def _build_header(self):
-        r = self._r
-        lbl, bg_key, fg_key = self._meta()
-        bg = COLORS[bg_key]
-        fg = COLORS[fg_key]
-
-        # Contenedor cabecera
-        self._hdr = tk.Frame(self, bg=bg, cursor="hand2")
-        self._hdr.pack(fill="x")
-        self._hdr.bind("<Button-1>", self._toggle)
-
-        # 1. DISPARO
-        disp_cell = tk.Frame(self._hdr, bg=bg, width=COL_DISP)
-        disp_cell.pack(side="left", fill="y")
-        disp_cell.pack_propagate(False)
-        lbl_disp = tk.Label(disp_cell, text=f"Disparo\n{r['disparo']}", font=FONT_BOLD, bg=bg, fg=fg, justify="center")
-        lbl_disp.pack(expand=True)
-        disp_cell.bind("<Button-1>", self._toggle)
-        lbl_disp.bind("<Button-1>", self._toggle)
-
-        # Separador
-        tk.Frame(self._hdr, bg=COLORS["border_light"], width=1).pack(side="left", fill="y")
-
-        # 2. ARCHIVO 1 (Base)
-        a1_cell = tk.Frame(self._hdr, bg=bg)
-        a1_cell.pack(side="left", fill="both", expand=True)
-        self._a1_lbl = tk.Label(a1_cell, font=FONT_SM, bg=bg, fg=fg, anchor="center")
-        self._a1_lbl.pack(expand=True, fill="both", padx=6, pady=6)
-        a1_cell.bind("<Button-1>", self._toggle)
-        self._a1_lbl.bind("<Button-1>", self._toggle)
-
-        # Separador
-        tk.Frame(self._hdr, bg=COLORS["border_light"], width=1).pack(side="left", fill="y")
-
-        # 3. ARCHIVO 2 (Nuevo)
-        a2_cell = tk.Frame(self._hdr, bg=bg)
-        a2_cell.pack(side="left", fill="both", expand=True)
-        self._a2_lbl = tk.Label(a2_cell, font=FONT_SM, bg=bg, fg=fg, anchor="center")
-        self._a2_lbl.pack(expand=True, fill="both", padx=6, pady=6)
-        a2_cell.bind("<Button-1>", self._toggle)
-        self._a2_lbl.bind("<Button-1>", self._toggle)
-
-        # Flecha indicadora si tiene discrepancias
-        if r["status"] == "diff":
-            self._arrow = tk.Label(self._hdr, text=" ▾ ", font=FONT_SM, bg=bg, fg=fg)
-            self._arrow.pack(side="right", padx=12)
-            self._arrow.bind("<Button-1>", self._toggle)
-
-        self._fill_cells()
-
-    def _fill_cells(self):
-        r = self._r
-        s = r["status"]
-
-        if s == "ok":
-            n1 = r.get("n_lineas1", "—")
-            self._a1_lbl.configure(text=f"{n1} líneas")
-            self._a2_lbl.configure(text=f"{r.get('n_lineas2','—')} líneas")
-        elif s == "only1":
-            self._a1_lbl.configure(text=f"{r.get('n_lineas1','—')} líneas\n(presente)")
-            self._a2_lbl.configure(text="—\n(ausente)")
-        elif s == "only2":
-            self._a1_lbl.configure(text="—\n(ausente)")
-            self._a2_lbl.configure(text=f"{r.get('n_lineas2','—')} líneas\n(presente)")
-        else: # diff
-            ndiff = sum(1 for lr in r["lineas"] if lr["status"] != "ok")
-            nok   = sum(1 for lr in r["lineas"] if lr["status"] == "ok")
-            self._a1_lbl.configure(text=f"{r.get('n_lineas1','—')} líneas\n{nok} ok · {ndiff} difs.")
-            self._a2_lbl.configure(text=f"{r.get('n_lineas2','—')} líneas\n{nok} ok · {ndiff} difs.")
-
-    def _toggle(self, _=None):
-        if self._r["status"] != "diff":
-            return
-        self._open = not self._open
-        if self._open:
-            self._arrow.configure(text=" ▴ ")
-            self._show_detail()
-        else:
-            self._arrow.configure(text=" ▾ ")
-            if self._detail:
-                self._detail.destroy()
-                self._detail = None
-
-    def _show_detail(self):
-        self._detail = tk.Frame(self, bg=COLORS["surface_light"], highlightthickness=1, highlightbackground=COLORS["border_light"])
-        self._detail.pack(fill="x", padx=1, pady=(0, 2))
-
-        # Cabecera de tabla interna
-        hdr = tk.Frame(self._detail, bg=COLORS["col_hdr"])
-        hdr.pack(fill="x")
-        for txt, w, side in [("Línea", 100, "left"), ("Estacas Archivo 1", 0, "left"), ("Estacas Archivo 2", 0, "left")]:
-            kw = {"width": w} if w else {}
-            tk.Label(hdr, text=txt, font=FONT_BOLD, bg=COLORS["col_hdr"], fg=COLORS["col_hdr_txt"],
-                     anchor="center", padx=6, pady=4, **kw).pack(side=side, fill="both", expand=(w == 0))
-
-        # Detalle de líneas
-        for i, lr in enumerate(self._r["lineas"]):
-            s = lr["status"]
-            row_bg = COLORS.get(STATUS_META_ROW.get(s, "surface_light"), "#FFFFFF")
-            row_fg = COLORS.get(STATUS_META_TXT.get(s, "text_light"), "#1E293B")
-            alt_bg = self._lighten(row_bg) if i % 2 == 0 else row_bg
-
-            row = tk.Frame(self._detail, bg=alt_bg)
-            row.pack(fill="x")
-
-            # Columna Línea
-            lin_cell = tk.Frame(row, bg=alt_bg, width=100)
-            lin_cell.pack(side="left", fill="y")
-            lin_cell.pack_propagate(False)
-            tk.Label(lin_cell, text=lr["linea"], font=FONT_MONO, bg=alt_bg, fg=row_fg, anchor="center").pack(expand=True, fill="both")
-
-            tk.Frame(row, bg=COLORS["border_light"], width=1).pack(side="left", fill="y")
-
-            def fmt_cell(linea_r, arch):
-                if arch == 1:
-                    if linea_r["status"] == "only2": return "—"
-                    lst = linea_r["estacas1"]
-                else:
-                    if linea_r["status"] == "only1": return "—"
-                    lst = linea_r["estacas2"]
-                if not lst: return "—"
-                def _n(x): return float(x) if x.lstrip("-").replace(".","").isdigit() else 0
-                ini = min((e[0] for e in lst), key=_n)
-                fin = max((e[1] for e in lst), key=_n)
-                return f"{ini} → {fin}" if len(lst) == 1 else f"{ini} → {fin}  ({len(lst)} rangos)"
-
-            for arch in (1, 2):
-                cell_txt = fmt_cell(lr, arch)
-                extra = ""
-                if s == "diff":
-                    missing = [ed for ed in lr["estaca_diffs"]
-                               if (arch == 1 and ed["tipo"] == "solo_arch2") or
-                                  (arch == 2 and ed["tipo"] == "solo_arch1")]
-                    if missing:
-                        extra = "\n⚠ " + "  ".join(f"{e['ini']}→{e['fin']}" for e in missing[:3])
-                        if len(missing) > 3:
-                            extra += f" +{len(missing)-3}"
-
-                a_cell = tk.Frame(row, bg=alt_bg)
-                a_cell.pack(side="left", fill="both", expand=True)
-                tk.Label(a_cell, text=cell_txt + extra, font=FONT_MONO, bg=alt_bg, fg=row_fg,
-                         anchor="center", justify="center", padx=6, pady=3).pack(fill="both", expand=True)
-                
-                if arch == 1:
-                    tk.Frame(row, bg=COLORS["border_light"], width=1).pack(side="left", fill="y")
-
-            tk.Frame(self._detail, bg=COLORS["border_light"], height=1).pack(fill="x")
-
-    @staticmethod
-    def _lighten(hex_color):
-        try:
-            r = int(hex_color[1:3], 16)
-            g = int(hex_color[3:5], 16)
-            b = int(hex_color[5:7], 16)
-            r = min(255, r + (255 - r) // 3)
-            g = min(255, g + (255 - g) // 3)
-            b = min(255, b + (255 - b) // 3)
-            return f"#{r:02x}{g:02x}{b:02x}"
-        except:
-            return hex_color
-
-
-STATUS_META_ROW = {"ok": "ok_row", "diff": "diff_row", "only1": "only1_row", "only2": "only2_row"}
-STATUS_META_TXT = {"ok": "ok_txt", "diff": "diff_txt", "only1": "only1_txt", "only2": "only2_txt"}
+# ─── Formateador de Fila de Coordenadas SPS/RPS ──────────────────────────────
+def format_diff_row(row, modo):
+    tipo = row.get("Tipo de Cambio", "")
+    if tipo == "Eliminado":
+        coords = []
+        if 'x_base' in row and pd.notna(row['x_base']): coords.append(f"X Base: {row['x_base']:.1f}")
+        if 'y_base' in row and pd.notna(row['y_base']): coords.append(f"Y Base: {row['y_base']:.1f}")
+        if 'elevacion_base' in row and pd.notna(row['elevacion_base']): coords.append(f"Z Base: {row['elevacion_base']:.1f}")
+        return f"Eliminado del Archivo 2. (" + ", ".join(coords) + ")"
+    elif tipo == "Nuevo":
+        coords = []
+        if 'x_nuevo' in row and pd.notna(row['x_nuevo']): coords.append(f"X Nuevo: {row['x_nuevo']:.1f}")
+        if 'y_nuevo' in row and pd.notna(row['y_nuevo']): coords.append(f"Y Nuevo: {row['y_nuevo']:.1f}")
+        if 'elevacion_nuevo' in row and pd.notna(row['elevacion_nuevo']): coords.append(f"Z Nuevo: {row['elevacion_nuevo']:.1f}")
+        return f"Nuevo en Archivo 2. (" + ", ".join(coords) + ")"
+    elif tipo == "Cambio de Coordenada":
+        diffs = []
+        if 'x_base' in row and 'x_nuevo' in row and row['x_base'] != row['x_nuevo']:
+            diffs.append(f"X: {row['x_base']:.1f} → {row['x_nuevo']:.1f}")
+        if 'y_base' in row and 'y_nuevo' in row and row['y_base'] != row['y_nuevo']:
+            diffs.append(f"Y: {row['y_base']:.1f} → {row['y_nuevo']:.1f}")
+        if 'elevacion_base' in row and 'elevacion_nuevo' in row and row['elevacion_base'] != row['elevacion_nuevo']:
+            diffs.append(f"Z: {row['elevacion_base']:.1f} → {row['elevacion_nuevo']:.1f}")
+        return "Cambio: " + ", ".join(diffs)
+    return ""
 
 
 # ─── Aplicación Principal (Dashboard) ─────────────────────────────────────────
@@ -449,8 +346,8 @@ class App(ctk.CTk):
         self.root = self
         
         # Dimensiones y títulos ejecutivos
-        self.title("SINOPEC - Monitor Sísmico de Adquisición y Comparación Estructural")
-        self.geometry("1200x820")
+        self.title("SINOPEC - Monitor de Adquisición y Comparación Script 采集与脚本比对监控系统 ")
+        self.geometry("1200x620")
         self.minsize(1050, 720)
         
         # Variables de control
@@ -463,7 +360,7 @@ class App(ctk.CTk):
         
         # Datos del comparador individual
         self._result = None
-        self._disp_frames = []
+        self._df_result = None
         
         # Imagen del logotipo
         self.logo_image = None
@@ -472,7 +369,6 @@ class App(ctk.CTk):
         self.set_screen("dashboard")
 
     def _build_dashboard_layout(self):
-        # Configurar retícula principal
         self.grid_rowconfigure(0, weight=1)
         self.grid_columnconfigure(1, weight=1)
         
@@ -503,20 +399,23 @@ class App(ctk.CTk):
             self.lbl_logo_fallback.pack(anchor="center")
             
         # Títulos y metadatos de versión
-        self.lbl_sys_title = ctk.CTkLabel(self.sidebar, text="SISTEMA SÍSMICO ADQUISICIÓN", font=("Segoe UI", 10, "bold"), text_color="#A5B4FC")
+        self.lbl_sys_title = ctk.CTkLabel(self.sidebar, text="SISTEMA DE VALIDACIÓN DE ADQUISICIÓN", font=("Segoe UI", 10, "bold"), text_color="#A5B4FC")
         self.lbl_sys_title.pack(anchor="center", pady=(5, 0))
-        self.lbl_version = ctk.CTkLabel(self.sidebar, text="Versión 2.2.0 (Estable)", font=("Segoe UI", 8, "italic"), text_color="#64748B")
+        self.lbl_sys_title_cn = ctk.CTkLabel(self.sidebar, text="采集验证系统", font=("Segoe UI", 10, "bold"), text_color="#A5B4FC")
+        self.lbl_sys_title_cn.pack(anchor="center", pady=(2, 10))
+        self.lbl_version = ctk.CTkLabel(self.sidebar, text="Versión 2.3.0", font=("Segoe UI", 8, "italic"), text_color="#64748B")
         self.lbl_version.pack(anchor="center", pady=(0, 20))
         
         # Separador decorativo superior
         line_top = ctk.CTkFrame(self.sidebar, height=2, fg_color=COLORS["red_accent"])
         line_top.pack(fill="x", padx=15, pady=(0, 15))
         
-        # Botones de navegación con iconos PIL vectoriales dibujados en tiempo de ejecución
+        # Botones de navegación con iconos
         self.nav_buttons = {}
         sections = [
             ("dashboard", "Dashboard Principal", "dashboard"),
             ("comparador", "Comparador Estructural", "comparador"),
+            ("boombox", "Analizar Boom Box", "lupita"),
             ("mapas", "Generador de Mapas", "mapas"),
             ("config", "Configuración y Temas", "config")
         ]
@@ -532,7 +431,7 @@ class App(ctk.CTk):
             btn.pack(fill="x", padx=10, pady=2)
             self.nav_buttons[key] = btn
             
-        # Franja inferior en el sidebar para metadatos del desarrollador
+        # Pie de página
         self.sidebar_footer = ctk.CTkFrame(self.sidebar, fg_color="transparent")
         self.sidebar_footer.pack(side="bottom", fill="x", pady=15, padx=15)
         
@@ -545,37 +444,34 @@ class App(ctk.CTk):
         self.main_area = ctk.CTkFrame(self, corner_radius=0, fg_color=COLORS["bg_light"])
         self.main_area.grid(row=0, column=1, sticky="nsew")
         
-        # Instanciar las vistas de pantalla en frames ocultos
         self.frames = {
             "dashboard": ctk.CTkFrame(self.main_area, fg_color="transparent"),
             "comparador": ctk.CTkFrame(self.main_area, fg_color="transparent"),
+            "boombox": ctk.CTkFrame(self.main_area, fg_color="transparent"),
             "mapas": ctk.CTkFrame(self.main_area, fg_color="transparent"),
             "config": ctk.CTkFrame(self.main_area, fg_color="transparent")
         }
         
         self._build_screen_dashboard()
         self._build_screen_comparador()
+        self._build_screen_boombox()
         self._build_screen_mapas()
         self._build_screen_config()
 
     def set_screen(self, screen_key):
-        """Cambia el foco del dashboard al panel seleccionado."""
         self.current_screen = screen_key
         
-        # Desactivar visualmente botones no activos y colorear el activo
         for k, btn in self.nav_buttons.items():
             if k == screen_key:
                 btn.configure(fg_color="#1E3A8A", text_color="#FFFFFF")
             else:
                 btn.configure(fg_color="transparent", text_color="#E2E8F0")
                 
-        # Ocultar todos los paneles y empaquetar el actual
         for f in self.frames.values():
             f.pack_forget()
             
         self.frames[screen_key].pack(fill="both", expand=True, padx=25, pady=25)
         
-        # Actualizaciones dinámicas
         if screen_key == "dashboard":
             self.recargar_dashboard_kpis()
 
@@ -589,12 +485,15 @@ class App(ctk.CTk):
         header = ctk.CTkFrame(f, fg_color="transparent")
         header.pack(fill="x", pady=(0, 15))
         
-        lbl_title = ctk.CTkLabel(header, text="DASHBOARD DE OPERACIONES SÍSMICAS", font=FONT_H1)
+        text_container = ctk.CTkFrame(header, fg_color="transparent")
+        text_container.pack(side="left", fill="y")
+        
+        lbl_title = ctk.CTkLabel(text_container, text="DASHBOARD 仪表板", font=FONT_H1)
         lbl_title.pack(anchor="w")
-        lbl_desc = ctk.CTkLabel(header, text="Control administrativo del proyecto y métricas clave de adquisición.", font=FONT_SM, text_color=COLORS["muted_light"])
+        lbl_desc = ctk.CTkLabel(text_container, text="Control administrativo del proyecto y métricas clave de adquisición.", font=FONT_SM, text_color=COLORS["muted_light"])
         lbl_desc.pack(anchor="w")
         
-        # Fila de tarjetas KPI principales
+        # Fila de tarjetas KPI
         self.kpi_container = ctk.CTkFrame(f, fg_color="transparent")
         self.kpi_container.pack(fill="x", pady=5)
         
@@ -620,6 +519,8 @@ class App(ctk.CTk):
             "MÓDULOS DE NAVEGACIÓN DISPONIBLES:\n"
             "• COMPARADOR ESTRUCTURAL: Permite comparar archivos de disparos SPS, receptores RPS o relaciones XPS "
             "de forma manual e individual, o realizar análisis secuenciales en carpetas de producción diaria (QC).\n"
+            "• ANALIZADOR BOOM BOX: Permite procesar archivos logs de Boom Box por lotes (selección múltiple) "
+            "y exportar toda la información consolidada en un reporte Excel.\n"
             "• GENERADOR DE MAPAS: Parsea las coordenadas geográficas de los geófonos y fuentes, proyecta la información "
             "a UTM y genera un plano interactivo HTML interactivo de visualización sísmica.\n"
             "• CONFIGURACIÓN Y TEMAS: Ajusta la interfaz visual del sistema (Modo Oscuro, Claro) y los parámetros globales."
@@ -628,23 +529,20 @@ class App(ctk.CTk):
         lbl_guia.pack(anchor="w", padx=20, pady=10)
 
     def recargar_dashboard_kpis(self):
-        """Actualiza dinámicamente las métricas que se muestran en las tarjetas del panel principal."""
-        # Último mapa
         if os.path.exists("mapa_sismico.html"):
             mod_time = datetime.fromtimestamp(os.path.getmtime("mapa_sismico.html")).strftime("%H:%M:%S")
             self.card_lmaps.set(f"Generado ({mod_time})", COLORS["ok_txt"])
         else:
             self.card_lmaps.set("No generado", COLORS["muted_light"])
             
-        # Última comparativa
         if os.path.exists("comparacion_paquetes.xlsx"):
             mod_time = datetime.fromtimestamp(os.path.getmtime("comparacion_paquetes.xlsx")).strftime("%H:%M:%S")
             self.card_lcomp.set(f"Reporte Listo ({mod_time})", COLORS["ok_txt"])
         else:
             self.card_lcomp.set("No disponible", COLORS["muted_light"])
             
-        # Archivos leídos
         self.card_lfiles.set("SPS, RPS, XPS", COLORS["accent"])
+
 
     # ──────────────────────────────────────────────────────────────────────────
     # PANEL 2: COMPARADOR UNIFICADO (INDIVIDUAL Y QC)
@@ -652,23 +550,21 @@ class App(ctk.CTk):
     def _build_screen_comparador(self):
         f = self.frames["comparador"]
         
-        # Encabezado
         header = ctk.CTkFrame(f, fg_color="transparent")
         header.pack(fill="x", pady=(0, 12))
         
-        lbl_title = ctk.CTkLabel(header, text="COMPARADOR ESTRUCTURAL SÍSMICO", font=FONT_H1)
+        lbl_title = ctk.CTkLabel(header, text="COMPARADOR ESTRUCTURAL DE SCRIPTS 脚本结构比较器 ", font=FONT_H1)
         lbl_title.pack(anchor="w")
         lbl_desc = ctk.CTkLabel(header, text="Módulo de comparación unificado para archivos unitarios y análisis de carpetas diarias (QC).", font=FONT_SM, text_color=COLORS["muted_light"])
         lbl_desc.pack(anchor="w")
         
-        # Tarjeta blanca para el selector del tipo de comparación
+        # Tarjeta selectora del modo
         selector_card = ctk.CTkFrame(f, corner_radius=10, border_width=1, fg_color=COLORS["surface_light"], border_color=COLORS["border_light"])
         selector_card.pack(fill="x", pady=5)
         
         lbl_sel_t = ctk.CTkLabel(selector_card, text="TIPO DE COMPARACIÓN", font=FONT_BOLD, text_color=COLORS["accent"])
         lbl_sel_t.pack(anchor="w", padx=15, pady=(12, 4))
         
-        # Segmented button para seleccionar modo de forma moderna (SAP Fiori Style)
         self.comp_mode_var = ctk.StringVar(value="Individual XPS")
         self.segmented_selector = ctk.CTkSegmentedButton(
             selector_card,
@@ -690,11 +586,9 @@ class App(ctk.CTk):
         self.files_grid = ctk.CTkFrame(self.frame_files_input, corner_radius=10, border_width=1, fg_color=COLORS["surface_light"], border_color=COLORS["border_light"])
         self.files_grid.pack(fill="x", pady=2)
         
-        # File selector 1
         self.ind_f1 = CTkFileSelector(self.files_grid, "Archivo 1 (Línea Base)", callback_change=self._auto_detect_file_type)
         self.ind_f1.pack(fill="x", padx=20, pady=(15, 8))
         
-        # File selector 2
         self.ind_f2 = CTkFileSelector(self.files_grid, "Archivo 2 (Línea Nueva)")
         self.ind_f2.pack(fill="x", padx=20, pady=(8, 15))
 
@@ -704,28 +598,23 @@ class App(ctk.CTk):
         self.folders_card = ctk.CTkFrame(self.frame_folders_input, corner_radius=10, border_width=1, fg_color=COLORS["surface_light"], border_color=COLORS["border_light"])
         self.folders_card.pack(fill="x", pady=2)
         
-        lbl_folders_t = ctk.CTkLabel(self.folders_card, text="COLA DE RESTRICCIONES DIARIAS", font=FONT_BOLD, text_color=COLORS["accent"])
-        lbl_folders_t.pack(anchor="w", padx=20, pady=(15, 4))
+        # Botón de carga visualmente idéntico en Paquete diario (QC)
+        self.qc_folder_selector = CTkFolderSelector(self.folders_card, "Seleccionar Carpeta de Paquete Diario:", callback_add=self._on_qc_add_folder)
+        self.qc_folder_selector.pack(fill="x", padx=20, pady=(15, 8))
         
-        # Contenedor de botones del listbox
+        # Contenedor de cola
         list_controls = ctk.CTkFrame(self.folders_card, fg_color="transparent")
         list_controls.pack(fill="both", expand=True, padx=20, pady=(0, 15))
         
         btn_box = ctk.CTkFrame(list_controls, fg_color="transparent")
         btn_box.pack(side="left", fill="y", padx=(0, 15))
         
-        icon_f = crear_icono_diseno("folder", "#FFFFFF")
-        btn_add = ctk.CTkButton(btn_box, text=" Agregar Carpeta", image=icon_f, font=FONT_BOLD, 
-                                fg_color=COLORS["accent"], hover_color=COLORS["accent_hover"],
-                                width=180, height=34, command=self._on_qc_add_folder)
-        btn_add.pack(pady=3)
-        
-        btn_clr = ctk.CTkButton(btn_box, text=" Limpiar Lista", font=FONT_BOLD,
+        btn_clr = ctk.CTkButton(btn_box, text=" Limpiar Lista completa", font=FONT_BOLD,
                                 fg_color=COLORS["bg_light"], text_color=COLORS["text_light"], hover_color=COLORS["border_light"],
                                 width=180, height=34, command=self._on_qc_clear_folders)
         btn_clr.pack(pady=3)
         
-        self.folders_list = CTkFolderList(list_controls, height=130)
+        self.folders_list = CTkPathList(list_controls, placeholder="No hay carpetas agregadas a la cola de comparación.", height=120)
         self.folders_list.pack(side="left", fill="both", expand=True)
 
         # ── BOTÓN GENERAL DE EJECUCIÓN ──
@@ -740,31 +629,30 @@ class App(ctk.CTk):
         self.btn_execute_compare.pack(fill="x")
 
         # ── CONTENEDOR DE RESULTADOS Y METRICAS ──
-        # Métrica individual KPI row
         self.metrics_bar = ctk.CTkFrame(f, fg_color="transparent")
         self.metrics_bar.pack(fill="x", pady=4)
         
-        self.m_d1 = CTkKPICard(self.metrics_bar, "Disparos Archivo 1", "—")
+        self.m_d1 = CTkKPICard(self.metrics_bar, "Registros Archivo 1", "—")
         self.m_d1.pack(side="left", expand=True, fill="x", padx=(0, 8))
         
-        self.m_d2 = CTkKPICard(self.metrics_bar, "Disparos Archivo 2", "—")
+        self.m_d2 = CTkKPICard(self.metrics_bar, "Registros Archivo 2", "—")
         self.m_d2.pack(side="left", expand=True, fill="x", padx=(0, 8))
         
-        self.m_diff = CTkKPICard(self.metrics_bar, "Disparos con Diferencias", "—")
+        self.m_diff = CTkKPICard(self.metrics_bar, "Con Diferencias", "—")
         self.m_diff.pack(side="left", expand=True, fill="x", padx=(0, 8))
         
-        self.m_miss = CTkKPICard(self.metrics_bar, "Disparos Faltantes", "—")
+        self.m_miss = CTkKPICard(self.metrics_bar, "Registros Faltantes", "—")
         self.m_miss.pack(side="left", expand=True, fill="x")
 
-        # Banner de diferencias de disparo (Cabecera extra)
+        # Banner de diferencias (Cabecera extra)
         self.ind_extra_lbl = ctk.CTkLabel(f, text="", font=FONT_SM, fg_color="#FFF3CD", text_color=COLORS["diff_txt"], height=30, corner_radius=4)
         
         # Leyenda de Colores
         self.legend_bar = ctk.CTkFrame(f, fg_color="transparent")
         self.legend_bar.pack(fill="x", pady=(4, 0))
         for bg_key, fg_key, txt in [
-            ("ok_row",    "ok_txt",    "■ Idéntico"),
-            ("diff_row",  "diff_txt",  "■ Con diferencias de línea/estaca"),
+            ("ok_row",    "ok_txt",    "■ Coincidente"),
+            ("diff_row",  "diff_txt",  "■ Con diferencias geométricas/estacas"),
             ("only1_row", "only1_txt", "■ Solo en Archivo 1"),
             ("only2_row", "only2_txt", "■ Solo en Archivo 2"),
         ]:
@@ -772,15 +660,10 @@ class App(ctk.CTk):
             lf.pack(side="left", padx=(0, 6), pady=2)
             tk.Label(lf, text=txt, font=FONT_SM, fg=COLORS[fg_key], bg=COLORS[bg_key], padx=10, pady=3).pack()
 
-        # Cabecera de columnas para el listado individual
-        self.list_col_hdr = ctk.CTkFrame(f, height=32, corner_radius=0, fg_color=COLORS["col_hdr"])
-        self.list_col_hdr.pack(fill="x", pady=(8, 0))
-
         # ── BARRA DE BUSQUEDA, FILTROS Y EXPORTACIONES ──
         self.filters_bar = ctk.CTkFrame(f, fg_color="transparent")
         self.filters_bar.pack(fill="x", pady=6)
         
-        # Botones exportar (Derecha)
         self.btn_exp_xlsx = ctk.CTkButton(self.filters_bar, text="Exportar Excel (.xlsx)", font=FONT_SM, width=150, height=32,
                                           fg_color=COLORS["ok_row"], text_color=COLORS["ok_txt"], hover_color="#C2DFB9",
                                           command=self._on_export_excel_individual)
@@ -796,18 +679,15 @@ class App(ctk.CTk):
                                            command=self._on_export_txt_diff)
         self.btn_exp_txt_d.pack(side="right", padx=(8, 0))
         
-        # Separador vertical
         self.v_sep = ctk.CTkFrame(self.filters_bar, width=1, height=28, fg_color=COLORS["border_light"])
         self.v_sep.pack(side="right", padx=10)
 
-        # Entrada de búsqueda
         self.search_val_ind = tk.StringVar()
         self.search_val_ind.trace_add("write", lambda *_: self._apply_individual_filter())
         
         self.ent_search = ctk.CTkEntry(self.filters_bar, placeholder_text="Buscar disparo...", textvariable=self.search_val_ind, font=FONT_SM, width=150, height=32)
         self.ent_search.pack(side="right")
 
-        # Filtros radio-button
         self.filter_val_ind = ctk.StringVar(value="all")
         
         self.lbl_filt_label = ctk.CTkLabel(self.filters_bar, text="Filtrar:", font=FONT_BOLD)
@@ -821,18 +701,50 @@ class App(ctk.CTk):
             rb.pack(side="left", padx=2)
             self.radios.append(rb)
 
-        # ── CONTENEDOR LISTADO DE DISPAROS ──
+        # ── CONTENEDOR DE LA TABLA PRINCIPAL (Treeview de alta calidad) ──
         self.list_container = ctk.CTkFrame(f, fg_color="transparent")
         self.list_container.pack(fill="both", expand=True, pady=4)
         
-        self.scroll_list = ctk.CTkScrollableFrame(self.list_container, fg_color="transparent")
-        self.scroll_list.pack(fill="both", expand=True)
-        
-        self.lbl_welcome_ind = ctk.CTkLabel(self.scroll_list, text="Carga dos archivos XPS o SPS y pulsa «Ejecutar comparación» para comenzar.",
-                                            font=FONT, text_color=COLORS["muted_light"])
-        self.lbl_welcome_ind.pack(pady=40, expand=True)
+        # Definición del estilo de Treeview
+        self.tree_style = ttk.Style()
+        self.tree_style.theme_use("clam")
+        self.tree_style.configure("Treeview", 
+                                  background="#FFFFFF", 
+                                  foreground="#0F172A", 
+                                  rowheight=28, 
+                                  font=("Segoe UI", 9),
+                                  fieldbackground="#FFFFFF",
+                                  borderwidth=0)
+        self.tree_style.configure("Treeview.Heading", 
+                                  background="#0F2942", 
+                                  foreground="#FFFFFF", 
+                                  font=("Segoe UI", 9, "bold"),
+                                  borderwidth=0)
+        self.tree_style.map("Treeview", 
+                            background=[("selected", "#1E3A8A")], 
+                            foreground=[("selected", "#FFFFFF")])
+        self.tree_style.map("Treeview.Heading",
+                            background=[("active", "#1E3A5F")])
 
-        # ── CONTENEDOR QC PROGRESO (Reemplaza al listado si es modo QC) ──
+        # Crear Treeview
+        self.tree_results = ttk.Treeview(self.list_container, show="headings", selectmode="browse")
+        
+        # Configurar colores de tags de fila en colores pasteles sobrios corporativos
+        self.tree_results.tag_configure("ok", background="#E2EFDA", foreground="#375623")
+        self.tree_results.tag_configure("diff", background="#FFF2CC", foreground="#7F6000")
+        self.tree_results.tag_configure("only1", background="#D9E1F2", foreground="#1F4E78")
+        self.tree_results.tag_configure("only2", background="#F2F2F2", foreground="#595959")
+
+        # Scrollbars
+        sb_y = ttk.Scrollbar(self.list_container, orient="vertical", command=self.tree_results.yview)
+        sb_x = ttk.Scrollbar(self.list_container, orient="horizontal", command=self.tree_results.xview)
+        self.tree_results.configure(yscrollcommand=sb_y.set, xscrollcommand=sb_x.set)
+        
+        sb_y.pack(side="right", fill="y")
+        sb_x.pack(side="bottom", fill="x")
+        self.tree_results.pack(side="left", fill="both", expand=True)
+
+        # ── CONTENEDOR QC PROGRESO ──
         self.qc_progress_container = ctk.CTkFrame(f, fg_color="transparent")
         
         self.qc_progress_card = ctk.CTkFrame(self.qc_progress_container, corner_radius=10, border_width=1, fg_color=COLORS["surface_light"], border_color=COLORS["border_light"])
@@ -856,17 +768,14 @@ class App(ctk.CTk):
         self.lbl_bottom_status.pack(side="left", padx=10)
 
     def _on_comp_mode_changed(self, value):
-        """Alterna visualmente los widgets de entrada según el modo seleccionado (Individual vs QC)."""
         if value == "Paquete diario (QC)":
             self.frame_files_input.pack_forget()
             self.frame_folders_input.pack(fill="x")
             self.btn_execute_compare.configure(text="EJECUTAR COMPARACIÓN DE PAQUETES (QC)")
             
-            # Ocultar listado y mostrar barra de progreso
             self.metrics_bar.pack_forget()
             self.ind_extra_lbl.pack_forget()
             self.legend_bar.pack_forget()
-            self.list_col_hdr.pack_forget()
             self.filters_bar.pack_forget()
             self.list_container.pack_forget()
             
@@ -876,17 +785,28 @@ class App(ctk.CTk):
             self.frame_files_input.pack(fill="x")
             self.btn_execute_compare.configure(text="EJECUTAR COMPARACIÓN DE DATOS")
             
-            # Ocultar barra de progreso y mostrar listado
             self.qc_progress_container.pack_forget()
             
             self.metrics_bar.pack(fill="x", pady=4)
             self.legend_bar.pack(fill="x", pady=(4, 0))
-            self.list_col_hdr.pack(fill="x", pady=(8, 0))
             self.filters_bar.pack(fill="x", pady=6)
             self.list_container.pack(fill="both", expand=True, pady=4)
+            
+            # Cambiar títulos de métricas según tipo
+            if value == "Individual XPS":
+                self.m_d1.lbl_title.configure(text="DISPAROS ARCHIVO 1")
+                self.m_d2.lbl_title.configure(text="DISPAROS ARCHIVO 2")
+                self.m_diff.lbl_title.configure(text="CON DIFERENCIAS")
+                self.m_miss.lbl_title.configure(text="DISPAROS FALTANTES")
+                self.ent_search.configure(placeholder_text="Buscar disparo...")
+            else:
+                self.m_d1.lbl_title.configure(text="TOTAL DIFERENCIAS")
+                self.m_d2.lbl_title.configure(text="PUNTOS NUEVOS")
+                self.m_diff.lbl_title.configure(text="CAMBIOS COORD.")
+                self.m_miss.lbl_title.configure(text="PUNTOS ELIMINADOS")
+                self.ent_search.configure(placeholder_text="Buscar línea/punto...")
 
     def _auto_detect_file_type(self, path):
-        """Determina de forma inteligente el tipo de archivo cargado y cambia el segmented button."""
         ext = os.path.splitext(path)[1].lower()
         if ext == ".xps":
             self.segmented_selector.set("Individual XPS")
@@ -898,7 +818,6 @@ class App(ctk.CTk):
             self.segmented_selector.set("Individual RPS")
             self._on_comp_mode_changed("Individual RPS")
         elif ext == ".txt":
-            # Escanear primeras líneas para detectar formato
             try:
                 with open(path, "r", errors="replace") as f:
                     for _ in range(15):
@@ -919,25 +838,179 @@ class App(ctk.CTk):
             except:
                 pass
 
-    def _on_qc_add_folder(self):
-        carpeta = filedialog.askdirectory(title="Selecciona la carpeta diaria del paquete sísmico")
-        if carpeta:
-            self.folders_list.add_folder(carpeta)
+    def _on_qc_add_folder(self, path=None):
+        if not path:
+            path = filedialog.askdirectory(title="Selecciona la carpeta diaria del paquete sísmico")
+        if path:
+            # Validar que contenga algún archivo sísmico (.rps, .sps, .xps)
+            archivos = os.listdir(path)
+            valid = False
+            for f in archivos:
+                ext = os.path.splitext(f)[1].lower()
+                if ext in ['.rps', '.rcp', '.sps', '.xps']:
+                    valid = True
+                    break
+            
+            if not valid:
+                messagebox.showwarning(
+                    "Carpeta inválida",
+                    f"La carpeta seleccionada:\n{path}\nno contiene archivos de adquisición válidos (.rps, .sps, .xps)."
+                )
+                self.qc_folder_selector.entry_path.delete(0, tk.END)
+                return
+                
+            self.folders_list.add_folder(path)
 
     def _on_qc_clear_folders(self):
         self.folders_list.clear()
 
     # ──────────────────────────────────────────────────────────────────────────
-    # PANEL 3: GENERACIÓN DE MAPAS
+    # PANEL 3: ANALIZADOR BOOM BOX (MULTIPLE ARCHIVO)
     # ──────────────────────────────────────────────────────────────────────────
-    def _build_screen_mapas(self):
-        f = self.frames["mapas"]
+    def _build_screen_boombox(self):
+        f = self.frames["boombox"]
         
         # Encabezado
         header = ctk.CTkFrame(f, fg_color="transparent")
         header.pack(fill="x", pady=(0, 15))
         
-        lbl_title = ctk.CTkLabel(header, text="GENERACIÓN DE MAPAS SÍSMICOS", font=FONT_H1)
+        lbl_title = ctk.CTkLabel(header, text="ANALIZADOR DE LOGS BOOM BOX (LOTES) 💥", font=FONT_H1)
+        lbl_title.pack(anchor="w")
+        lbl_desc = ctk.CTkLabel(header, text="Módulo de procesamiento por lotes para extracción de metadatos de múltiples logs de Sercel Boom Box.", font=FONT_SM, text_color=COLORS["muted_light"])
+        lbl_desc.pack(anchor="w")
+        
+        # Tarjeta principal
+        card = ctk.CTkFrame(f, corner_radius=10, border_width=1, fg_color=COLORS["surface_light"], border_color=COLORS["border_light"])
+        card.pack(fill="both", expand=True, pady=5)
+        
+        tk.Label(card, text="COLA DE ARCHIVOS LOG DE BOOM BOX", font=FONT_BOLD, bg=COLORS["surface_light"], fg=COLORS["accent"]).pack(anchor="w", padx=25, pady=(20, 5))
+        
+        # Contenedor de lista
+        list_controls = ctk.CTkFrame(card, fg_color="transparent")
+        list_controls.pack(fill="both", expand=True, padx=25, pady=10)
+        
+        btn_box = ctk.CTkFrame(list_controls, fg_color="transparent")
+        btn_box.pack(side="left", fill="y", padx=(0, 15))
+        
+        icon_f = crear_icono_diseno("file", "#FFFFFF")
+        btn_add = ctk.CTkButton(btn_box, text=" Agregar Archivos Log", image=icon_f, font=FONT_BOLD, 
+                                fg_color=COLORS["accent"], hover_color=COLORS["accent_hover"],
+                                width=180, height=34, command=self._on_boombox_add_files)
+        btn_add.pack(pady=3)
+        
+        btn_clr = ctk.CTkButton(btn_box, text=" Limpiar Lista completa", font=FONT_BOLD,
+                                fg_color=COLORS["bg_light"], text_color=COLORS["text_light"], hover_color=COLORS["border_light"],
+                                width=180, height=34, command=self._on_boombox_clear_files)
+        btn_clr.pack(pady=3)
+        
+        self.boombox_files_list = CTkPathList(list_controls, placeholder="No hay archivos logs de Boom Box agregados a la cola.", height=200)
+        self.boombox_files_list.pack(side="left", fill="both", expand=True)
+
+        tk.Frame(card, bg=COLORS["border_light"], height=1).pack(fill="x", padx=25, pady=15)
+
+        # Acción y Progreso
+        action_f = ctk.CTkFrame(card, fg_color="transparent")
+        action_f.pack(fill="x", padx=25, pady=(5, 20))
+        
+        self.btn_run_boombox = ctk.CTkButton(action_f, text="EJECUTAR ANÁLISIS DE LOGS", font=FONT_H2, 
+                                             fg_color=COLORS["accent"], hover_color=COLORS["accent_hover"],
+                                             width=300, height=44, command=self._on_execute_boombox_analysis)
+        self.btn_run_boombox.pack(side="left")
+        
+        self.progress_boombox = ttk.Progressbar(action_f, mode='determinate', length=250)
+        self.progress_boombox.pack(side="left", padx=20)
+        
+        self.lbl_estado_boombox = ctk.CTkLabel(action_f, text="Esperando inicio...", font=FONT_SM, text_color=COLORS["muted_light"])
+        self.lbl_estado_boombox.pack(side="left")
+
+    def _on_boombox_add_files(self):
+        paths = filedialog.askopenfilenames(
+            title="Seleccionar archivos log de Boom Box",
+            filetypes=[("Todos los archivos", "*.*")]
+        )
+        if paths:
+            for p in paths:
+                self.boombox_files_list.add_path(p)
+
+    def _on_boombox_clear_files(self):
+        self.boombox_files_list.clear()
+
+    def _on_execute_boombox_analysis(self):
+        files = self.boombox_files_list.paths
+        if not files:
+            messagebox.showwarning("Advertencia", "Selecciona al menos un archivo log de Boom Box para analizar.")
+            return
+
+        self.btn_run_boombox.configure(state="disabled")
+        self.progress_boombox['value'] = 0
+        self.lbl_estado_boombox.configure(text="Procesando archivos...")
+
+        # Guardar reporte consolidado
+        default_name = "Reporte_BoomBox_Consolidado.xlsx"
+        out_path = filedialog.asksaveasfilename(
+            title="Guardar reporte Excel consolidado",
+            defaultextension=".xlsx",
+            filetypes=[("Archivo Excel (*.xlsx)", "*.xlsx")],
+            initialfile=default_name
+        )
+        if not out_path:
+            self.btn_run_boombox.configure(state="normal")
+            return
+
+        progreso = Progreso(self.root, self.progress_boombox, self.lbl_estado_boombox)
+
+        def tarea():
+            try:
+                from core.boom_box_parser import parse_multiple_boom_box_logs, export_multiple_boom_box_xlsx
+                
+                progreso.actualizar(10, "Cargando archivos logs...")
+                results = parse_multiple_boom_box_logs(files)
+                
+                if not results:
+                    self.root.after(0, lambda: messagebox.showwarning("Sin registros", "No se encontraron registros 'Created SP...' válidos en los archivos seleccionados."))
+                    self.root.after(0, self._finalizar_boombox_error)
+                    return
+                    
+                progreso.actualizar(50, "Exportando y aplicando estilos a Excel...")
+                final_path = export_multiple_boom_box_xlsx(results, out_path)
+                
+                self.root.after(0, functools.partial(self._finalizar_boombox_ok, final_path))
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                self.root.after(0, functools.partial(self._finalizar_boombox_error_msg, str(e)))
+
+        threading.Thread(target=tarea, daemon=True).start()
+
+    def _finalizar_boombox_ok(self, final_path):
+        self.btn_run_boombox.configure(state="normal")
+        self.progress_boombox['value'] = 100
+        self.lbl_estado_boombox.configure(text="Proceso completado.", text_color=COLORS["ok_txt"])
+        messagebox.showinfo("Éxito", f"Los logs de Boom Box han sido procesados y guardados correctamente en:\n{final_path}")
+        self.recargar_dashboard_kpis()
+
+    def _finalizar_boombox_error(self):
+        self.btn_run_boombox.configure(state="normal")
+        self.progress_boombox['value'] = 0
+        self.lbl_estado_boombox.configure(text="Sin registros extraídos.", text_color=COLORS["red_accent"])
+
+    def _finalizar_boombox_error_msg(self, msg):
+        self.btn_run_boombox.configure(state="normal")
+        self.progress_boombox['value'] = 0
+        self.lbl_estado_boombox.configure(text="Error de análisis.", text_color=COLORS["red_accent"])
+        messagebox.showerror("Error", f"Ocurrió un error al procesar los archivos: {msg}")
+
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # PANEL 4: GENERACIÓN DE MAPAS
+    # ──────────────────────────────────────────────────────────────────────────
+    def _build_screen_mapas(self):
+        f = self.frames["mapas"]
+        
+        header = ctk.CTkFrame(f, fg_color="transparent")
+        header.pack(fill="x", pady=(0, 15))
+        
+        lbl_title = ctk.CTkLabel(header, text="GENERACIÓN DE MAPAS DE ADQUISICIÓN 采集地图生成 ", font=FONT_H1)
         lbl_title.pack(anchor="w")
         lbl_desc = ctk.CTkLabel(header, text="Mapeo geográfico de los datos cargados y proyección en coordenadas UTM.", font=FONT_SM, text_color=COLORS["muted_light"])
         lbl_desc.pack(anchor="w")
@@ -945,10 +1018,8 @@ class App(ctk.CTk):
         card = ctk.CTkFrame(f, corner_radius=10, border_width=1, fg_color=COLORS["surface_light"], border_color=COLORS["border_light"])
         card.pack(fill="both", expand=True, pady=5)
         
-        # 1. Selección de archivos
         tk.Label(card, text="1. SELECCIÓN DE ARCHIVOS DEL PROYECTO", font=FONT_BOLD, bg=COLORS["surface_light"], fg=COLORS["accent"]).pack(anchor="w", padx=25, pady=(20, 5))
         
-        # Selectores usando nuestro nuevo componente CTkFileSelector
         self.map_f_rps = CTkFileSelector(card, "Archivo RPS (Receptores)")
         self.map_f_rps.pack(fill="x", padx=25, pady=4)
         
@@ -960,7 +1031,6 @@ class App(ctk.CTk):
 
         tk.Frame(card, bg=COLORS["border_light"], height=1).pack(fill="x", padx=25, pady=15)
 
-        # 2. Configuración
         tk.Label(card, text="2. PARÁMETROS SÍSMICOS Y UTM", font=FONT_BOLD, bg=COLORS["surface_light"], fg=COLORS["accent"]).pack(anchor="w", padx=25, pady=(5, 5))
         
         grid_config = ctk.CTkFrame(card, fg_color="transparent")
@@ -982,7 +1052,6 @@ class App(ctk.CTk):
 
         tk.Frame(card, bg=COLORS["border_light"], height=1).pack(fill="x", padx=25, pady=15)
 
-        # 3. Acciones
         btn_action_f = ctk.CTkFrame(card, fg_color="transparent")
         btn_action_f.pack(fill="x", padx=25, pady=(5, 20))
         
@@ -998,16 +1067,15 @@ class App(ctk.CTk):
         self.lbl_estado_map.pack(side="left")
 
     # ──────────────────────────────────────────────────────────────────────────
-    # PANEL 4: CONFIGURACIÓN Y TEMAS
+    # PANEL 5: CONFIGURACIÓN Y TEMAS
     # ──────────────────────────────────────────────────────────────────────────
     def _build_screen_config(self):
         f = self.frames["config"]
         
-        # Encabezado
         header = ctk.CTkFrame(f, fg_color="transparent")
         header.pack(fill="x", pady=(0, 15))
         
-        lbl_title = ctk.CTkLabel(header, text="CONFIGURACIÓN GLOBAL Y TEMAS", font=FONT_H1)
+        lbl_title = ctk.CTkLabel(header, text="CONFIGURACIÓN GLOBAL Y TEMAS 全局配置与主题", font=FONT_H1)
         lbl_title.pack(anchor="w")
         lbl_desc = ctk.CTkLabel(header, text="Ajustes de la interfaz de usuario, personalización de colores y parámetros predeterminados.", font=FONT_SM, text_color=COLORS["muted_light"])
         lbl_desc.pack(anchor="w")
@@ -1044,27 +1112,24 @@ class App(ctk.CTk):
         lbl_params_desc = ctk.CTkLabel(params_frame, text="Zona UTM de arranque por defecto:  Zona 14N (Q14)\nMuestreo predeterminado de puntos:  30", font=FONT, justify="left")
         lbl_params_desc.pack(anchor="w")
 
-        # Botón para limpiar cache / estados
         btn_reset = ctk.CTkButton(card, text="Restablecer Configuración de Fábrica", font=FONT_BOLD, fg_color="#EF4444", hover_color="#DC2626", text_color="white", height=36, command=self._on_reset_settings)
         btn_reset.pack(anchor="w", padx=25, pady=25)
 
     def _on_theme_changed(self, theme):
-        """Cambia dinámicamente el aspecto gráfico de CustomTkinter."""
         ctk.set_appearance_mode(theme)
-        
-        # Forzar actualización de colores en nuestras tarjetas de métricas
         self.root.update()
         
-        # Actualizar colores en widgets personalizados
         self.folders_list._update_colors()
         self.folders_list.render()
         
-        # Cambiar el color de fondo de las áreas principales de control
+        if hasattr(self, "boombox_files_list"):
+            self.boombox_files_list._update_colors()
+            self.boombox_files_list.render()
+        
         mode = ctk.get_appearance_mode()
         if mode == "Dark":
             self.main_area.configure(fg_color=COLORS["bg_dark"])
             self.sidebar.configure(fg_color=COLORS["sidebar_dark"])
-            # Actualizar tarjetas de KPI
             self.card_lmaps.update_theme()
             self.card_lcomp.update_theme()
             self.card_lfiles.update_theme()
@@ -1072,6 +1137,14 @@ class App(ctk.CTk):
             self.m_d2.update_theme()
             self.m_diff.update_theme()
             self.m_miss.update_theme()
+            
+            self.tree_style.configure("Treeview", 
+                                      background="#1E293B", 
+                                      foreground="#F8FAFC", 
+                                      fieldbackground="#1E293B")
+            self.tree_style.configure("Treeview.Heading", 
+                                      background="#0F172A", 
+                                      foreground="#FFFFFF")
         else:
             self.main_area.configure(fg_color=COLORS["bg_light"])
             self.sidebar.configure(fg_color=COLORS["sidebar_light"])
@@ -1082,6 +1155,14 @@ class App(ctk.CTk):
             self.m_d2.update_theme()
             self.m_diff.update_theme()
             self.m_miss.update_theme()
+            
+            self.tree_style.configure("Treeview", 
+                                      background="#FFFFFF", 
+                                      foreground="#0F172A", 
+                                      fieldbackground="#FFFFFF")
+            self.tree_style.configure("Treeview.Heading", 
+                                      background="#0F2942", 
+                                      foreground="#FFFFFF")
 
     def _on_reset_settings(self):
         self.theme_selector.set("Light")
@@ -1112,7 +1193,6 @@ class App(ctk.CTk):
             self.ent_muestreo_map.delete(0, tk.END)
             self.ent_muestreo_map.insert(0, "30")
 
-        # Usar la clase de control de barra de progreso existente
         progreso = Progreso(self.root, self.progress_map, self.lbl_estado_map)
 
         def tarea():
@@ -1146,6 +1226,39 @@ class App(ctk.CTk):
     # ──────────────────────────────────────────────────────────────────────────
     # MÉTODOS DEL COMPARADOR ESTRUCTURAL
     # ──────────────────────────────────────────────────────────────────────────
+    def validar_archivo_contenido(self, path, modo):
+        ext = os.path.splitext(path)[1].lower()
+        if modo == "Individual SPS":
+            if ext not in [".sps", ".txt"]:
+                return False, "El archivo no tiene la extensión .sps o .txt requerida para SPS."
+            tipo_letra = "S"
+        elif modo == "Individual RPS":
+            if ext not in [".rps", ".rcp", ".txt"]:
+                return False, "El archivo no tiene la extensión .rps, .rcp o .txt requerida para RPS."
+            tipo_letra = "R"
+        elif modo == "Individual XPS":
+            if ext not in [".xps", ".txt"]:
+                return False, "El archivo no tiene la extensión .xps o .txt requerida para XPS."
+            tipo_letra = "X"
+        else:
+            return True, ""
+
+        try:
+            with open(path, "r", errors="replace") as f:
+                for _ in range(50):
+                    line = f.readline()
+                    if not line: break
+                    line = line.strip()
+                    if not line: continue
+                    if line.startswith("H"):
+                        continue
+                    if line.startswith(tipo_letra):
+                        return True, ""
+            
+            return False, f"El archivo no contiene registros válidos que comiencen con la letra '{tipo_letra}' correspondiente al modo '{modo}'."
+        except Exception as e:
+            return False, f"Error al leer el archivo: {str(e)}"
+
     def _on_execute_comparison(self):
         mode = self.segmented_selector.get()
         
@@ -1173,20 +1286,41 @@ class App(ctk.CTk):
 
             threading.Thread(target=tarea, daemon=True).start()
             
-        else: # Comparación Individual (SPS, RPS, XPS)
+        else: # Comparación Individual
             p1 = self.ind_f1.get()
             p2 = self.ind_f2.get()
             if not p1 or not p2:
                 messagebox.showwarning("Faltan archivos", "Selecciona los dos archivos antes de comparar.")
                 return
                 
+            # Validar archivos
+            ok1, msg1 = self.validar_archivo_contenido(p1, mode)
+            if not ok1:
+                messagebox.showwarning("Archivo 1 incorrecto", f"Archivo 1 inválido:\n{msg1}")
+                return
+                
+            ok2, msg2 = self.validar_archivo_contenido(p2, mode)
+            if not ok2:
+                messagebox.showwarning("Archivo 2 incorrecto", f"Archivo 2 inválido:\n{msg2}")
+                return
+                
             self.lbl_bottom_status.configure(text="Comparando archivos...")
             self.root.update()
             
             try:
-                self._result = run_comparison(p1, p2)
+                if mode == "Individual XPS":
+                    self._df_result = None
+                    self._result = run_comparison(p1, p2)
+                else: # SPS o RPS
+                    self._result = None
+                    df1 = leer_sps_rps(p1, 'S' if mode == "Individual SPS" else 'R')
+                    df2 = leer_sps_rps(p2, 'S' if mode == "Individual SPS" else 'R')
+                    self._df_result = comparar_sin_merge(df1, df2, ['linea', 'punto'], ['x', 'y', 'elevacion'])
+                
                 self._render_individual_results()
             except Exception as ex:
+                import traceback
+                traceback.print_exc()
                 messagebox.showerror("Error", str(ex))
                 self.lbl_bottom_status.configure(text="Error en la comparación.")
 
@@ -1227,109 +1361,261 @@ class App(ctk.CTk):
         messagebox.showerror("Error", msg)
 
     def _render_individual_results(self):
-        r = self._result
-        n1, n2 = r["n_disparos1"], r["n_disparos2"]
-        ndiff  = len(r["disparos_diff"])
-        nmiss  = len(r["disparos_solo1"]) + len(r["disparos_solo2"])
+        mode = self.segmented_selector.get()
+        
+        # Limpiar listado de filas del Treeview
+        self.tree_results.delete(*self.tree_results.get_children())
+        
+        if mode == "Individual XPS":
+            r = self._result
+            if not r:
+                return
+            n1, n2 = r["n_disparos1"], r["n_disparos2"]
+            ndiff  = len(r["disparos_diff"])
+            nmiss  = len(r["disparos_solo1"]) + len(r["disparos_solo2"])
 
-        self.m_d1.set(n1)
-        self.m_d2.set(n2, COLORS["diff_txt"] if n1 != n2 else None)
-        self.m_diff.set(ndiff, COLORS["diff_txt"] if ndiff else COLORS["ok_txt"])
-        self.m_miss.set(nmiss, COLORS["only1_txt"] if nmiss else COLORS["ok_txt"])
+            self.m_d1.set(n1)
+            self.m_d2.set(n2, COLORS["diff_txt"] if n1 != n2 else None)
+            self.m_diff.set(ndiff, COLORS["diff_txt"] if ndiff else COLORS["ok_txt"])
+            self.m_miss.set(nmiss, COLORS["only1_txt"] if nmiss else COLORS["ok_txt"])
 
-        if n1 != n2:
-            diff  = abs(n1 - n2)
-            which = "Archivo 1" if n1 > n2 else "Archivo 2"
-            self.ind_extra_lbl.configure(text=f"  ⚠  El {which} tiene {diff} disparo(s) adicional(es) sin correspondencia.")
-            self.ind_extra_lbl.pack(fill="x", pady=(0, 4))
-        else:
-            self.ind_extra_lbl.pack_forget()
+            if n1 != n2:
+                diff  = abs(n1 - n2)
+                which = "Archivo 1" if n1 > n2 else "Archivo 2"
+                self.ind_extra_lbl.configure(text=f"  ⚠  El {which} tiene {diff} disparo(s) adicional(es) sin correspondencia.")
+                self.ind_extra_lbl.pack(fill="x", pady=(0, 4))
+            else:
+                self.ind_extra_lbl.pack_forget()
 
-        # Re-dibujar cabeceras de tabla
-        for w in self.list_col_hdr.winfo_children():
-            w.destroy()
+            # Configurar columnas del Treeview para XPS
+            self.tree_results.configure(columns=("disparo", "archivo1", "archivo2", "status"), show="headings")
+            self.tree_results.heading("disparo", text="Disparo / Línea")
+            self.tree_results.heading("archivo1", text=f"Archivo 1 (Base): {r['name1']}")
+            self.tree_results.heading("archivo2", text=f"Archivo 2 (Nuevo): {r['name2']}")
+            self.tree_results.heading("status", text="Estado")
+            
+            self.tree_results.column("disparo", width=180, anchor="w")
+            self.tree_results.column("archivo1", width=250, anchor="center")
+            self.tree_results.column("archivo2", width=250, anchor="center")
+            self.tree_results.column("status", width=150, anchor="center")
 
-        d_cell = tk.Frame(self.list_col_hdr, bg=COLORS["col_hdr"], width=COL_DISP)
-        d_cell.pack(side="left", fill="y")
-        d_cell.pack_propagate(False)
-        tk.Label(d_cell, text="DISPARO", font=FONT_BOLD, bg=COLORS["col_hdr"], fg=COLORS["col_hdr_txt"], anchor="center").pack(expand=True, fill="both")
+            # Aplicar filtro
+            filt   = self.filter_val_ind.get()
+            search = self.search_val_ind.get().strip().lower()
 
-        tk.Frame(self.list_col_hdr, bg=COLORS["border_light"], width=1).pack(side="left", fill="y")
+            for shot in r["results"]:
+                s_status = shot["status"]
+                
+                # Filtrar
+                show = True
+                if filt == "diff"    and s_status != "diff":              show = False
+                if filt == "ok"      and s_status != "ok":                show = False
+                if filt == "missing" and s_status not in ("only1","only2"): show = False
+                if show and search and search not in shot["disparo"].lower():    show = False
+                
+                if not show:
+                    continue
 
-        for txt in (f"ARCHIVO 1: {r['name1']}", f"ARCHIVO 2: {r['name2']}"):
-            cell = tk.Frame(self.list_col_hdr, bg=COLORS["col_hdr"])
-            cell.pack(side="left", fill="both", expand=True)
-            tk.Label(cell, text=txt, font=FONT_BOLD, bg=COLORS["col_hdr"], fg=COLORS["col_hdr_txt"], anchor="center").pack(fill="both", pady=5)
-            tk.Frame(self.list_col_hdr, bg=COLORS["border_light"], width=1).pack(side="left", fill="y")
+                # Formatear filas parent
+                a1_text = ""
+                a2_text = ""
+                status_text = ""
+                tag = ""
+                
+                if s_status == "ok":
+                    a1_text = f"{shot.get('n_lineas1', '—')} líneas"
+                    a2_text = f"{shot.get('n_lineas2', '—')} líneas"
+                    status_text = "Idéntico"
+                    tag = "ok"
+                elif s_status == "only1":
+                    a1_text = f"{shot.get('n_lineas1', '—')} líneas (presente)"
+                    a2_text = "—"
+                    status_text = "Solo en Archivo 1"
+                    tag = "only1"
+                elif s_status == "only2":
+                    a1_text = "—"
+                    a2_text = f"{shot.get('n_lineas2', '—')} líneas (presente)"
+                    status_text = "Solo en Archivo 2"
+                    tag = "only2"
+                else: # diff
+                    nd = sum(1 for lr in shot["lineas"] if lr["status"] != "ok")
+                    nk = sum(1 for lr in shot["lineas"] if lr["status"] == "ok")
+                    a1_text = f"{shot.get('n_lineas1', '—')} líneas ({nk} ok · {nd} difs)"
+                    a2_text = f"{shot.get('n_lineas2', '—')} líneas ({nk} ok · {nd} difs)"
+                    status_text = "Con diferencias"
+                    tag = "diff"
 
-        # Limpiar listado de filas
-        for w in self.scroll_list.winfo_children():
-            w.destroy()
-        self._disp_frames = []
+                item_id = self.tree_results.insert("", "end", values=(shot["disparo"], a1_text, a2_text, status_text), tags=(tag,))
+                
+                # Insertar detalles (hijos) si es con diferencias
+                if s_status == "diff":
+                    for lr in shot["lineas"]:
+                        lr_status = lr["status"]
+                        child_a1 = ""
+                        child_a2 = ""
+                        
+                        def fmt_estacas(lst):
+                            if not lst: return "—"
+                            def _n(x): return float(x) if x.lstrip("-").replace(".","").isdigit() else 0
+                            ini = min((e[0] for e in lst), key=_n)
+                            fin = max((e[1] for e in lst), key=_n)
+                            return f"{ini} → {fin}" if len(lst) == 1 else f"{ini} → {fin}  ({len(lst)} rangos)"
 
-        for shot in r["results"]:
-            row = CTkDisparoRow(self.scroll_list, shot)
-            row.pack(fill="x", pady=2)
-            self._disp_frames.append((row, shot))
+                        if lr_status == "only2":
+                            child_a1 = "—"
+                            child_a2 = fmt_estacas(lr["estacas2"])
+                        elif lr_status == "only1":
+                            child_a1 = fmt_estacas(lr["estacas1"])
+                            child_a2 = "—"
+                        else:
+                            child_a1 = fmt_estacas(lr["estacas1"])
+                            child_a2 = fmt_estacas(lr["estacas2"])
+                            
+                        child_tag = "only2" if lr_status == "only2" else ("only1" if lr_status == "only1" else ("ok" if lr_status == "ok" else "diff"))
+                        child_status = "Línea Solo en Archivo 2" if lr_status == "only2" else ("Línea Solo en Archivo 1" if lr_status == "only1" else ("Línea Idéntica" if lr_status == "ok" else "Diferencias en Estacas"))
+                        
+                        self.tree_results.insert(item_id, "end", values=(f"  Línea {lr['linea']}", child_a1, child_a2, child_status), tags=(child_tag,))
 
-        self._apply_individual_filter()
+            total = len(r["results"])
+            ok    = len(r["disparos_ok"])
+            self.lbl_bottom_status.configure(
+                text=(f"✔  {total} disparos  ·  {ok} idénticos  ·  "
+                      f"{ndiff} con diferencias  ·  {nmiss} faltantes"))
 
-        total = len(r["results"])
-        ok    = len(r["disparos_ok"])
-        self.lbl_bottom_status.configure(
-            text=(f"✔  {total} disparos  ·  {ok} idénticos  ·  "
-                  f"{ndiff} con diferencias  ·  {nmiss} faltantes"))
+        else: # SPS o RPS
+            df_diff = self._df_result
+            if df_diff is None:
+                return
+                
+            n_nuevos = len(df_diff[df_diff['Tipo de Cambio'] == 'Nuevo'])
+            n_elim = len(df_diff[df_diff['Tipo de Cambio'] == 'Eliminado'])
+            ndiff = len(df_diff[df_diff['Tipo de Cambio'] == 'Cambio de Coordenada'])
+            total = len(df_diff)
+
+            self.m_d1.set(total)
+            self.m_d2.set(n_nuevos, COLORS["diff_txt"] if n_nuevos else None)
+            self.m_diff.set(ndiff, COLORS["diff_txt"] if ndiff else COLORS["ok_txt"])
+            self.m_miss.set(n_elim, COLORS["only1_txt"] if n_elim else COLORS["ok_txt"])
+
+            # Configurar columnas del Treeview para SPS/RPS
+            self.tree_results.configure(columns=("linea", "punto", "tipo_cambio", "detalles"), show="headings")
+            self.tree_results.heading("linea", text="Línea")
+            self.tree_results.heading("punto", text="Punto")
+            self.tree_results.heading("tipo_cambio", text="Tipo de Cambio")
+            self.tree_results.heading("detalles", text="Detalles de Coordenadas (X, Y, Z)")
+            
+            self.tree_results.column("linea", width=120, anchor="center")
+            self.tree_results.column("punto", width=120, anchor="center")
+            self.tree_results.column("tipo_cambio", width=180, anchor="center")
+            self.tree_results.column("detalles", width=450, anchor="w")
+
+            filt   = self.filter_val_ind.get()
+            search = self.search_val_ind.get().strip().lower()
+
+            for _, row in df_diff.iterrows():
+                tipo_cambio = row['Tipo de Cambio']
+                
+                show = True
+                if filt == "diff"    and tipo_cambio != "Cambio de Coordenada": show = False
+                if filt == "ok"      and tipo_cambio != "":                     show = False
+                if filt == "missing" and tipo_cambio not in ("Nuevo", "Eliminado"): show = False
+                
+                search_text = f"{row.get('linea', '')} {row.get('punto', '')}".lower()
+                if show and search and search not in search_text:
+                    show = False
+                    
+                if not show:
+                    continue
+
+                tag = "diff" if tipo_cambio == "Cambio de Coordenada" else ("only1" if tipo_cambio == "Eliminado" else "only2")
+                detalles_str = format_diff_row(row, mode)
+                
+                self.tree_results.insert("", "end", values=(row['linea'], row['punto'], tipo_cambio, detalles_str), tags=(tag,))
+
+            self.lbl_bottom_status.configure(
+                text=f"✔  {total} diferencias encontradas  ·  {n_nuevos} nuevos  ·  {n_elim} eliminados  ·  {ndiff} cambios coord.")
 
     def _apply_individual_filter(self):
-        if not self._disp_frames:
-            return
-        filt   = self.filter_val_ind.get()
-        search = self.search_val_ind.get().strip().lower()
-        for row, s in self._disp_frames:
-            show = True
-            if filt == "diff"    and s["status"] != "diff":              show = False
-            if filt == "ok"      and s["status"] != "ok":                show = False
-            if filt == "missing" and s["status"] not in ("only1","only2"): show = False
-            if show and search and search not in s["disparo"].lower():    show = False
-            if show: row.pack(fill="x", pady=2)
-            else:    row.pack_forget()
+        self._render_individual_results()
 
     def _on_export_excel_individual(self):
-        if not self._result:
-            messagebox.showwarning("Sin datos", "Ejecuta una comparación primero.")
-            return
-        path = filedialog.asksaveasfilename(
-            defaultextension=".xlsx",
-            filetypes=[("Excel", "*.xlsx")],
-            initialfile="comparativa.xlsx")
-        if path:
-            try:
-                export_xlsx(self._result, path)
-                self.lbl_bottom_status.configure(text=f"Reporte Excel guardado: {os.path.basename(path)}")
-                messagebox.showinfo("Exportación Exitosa", f"El archivo Excel ha sido generado con éxito:\n{path}")
-            except ImportError as e:
-                messagebox.showerror("Módulo faltante", str(e))
+        mode = self.segmented_selector.get()
+        if mode == "Individual XPS":
+            if not self._result:
+                messagebox.showwarning("Sin datos", "Ejecuta una comparación primero.")
+                return
+            path = filedialog.asksaveasfilename(
+                defaultextension=".xlsx",
+                filetypes=[("Excel", "*.xlsx")],
+                initialfile="comparativa_xps.xlsx")
+            if path:
+                try:
+                    export_xlsx(self._result, path)
+                    self.lbl_bottom_status.configure(text=f"Reporte Excel guardado: {os.path.basename(path)}")
+                    messagebox.showinfo("Exportación Exitosa", f"El archivo Excel ha sido generado con éxito:\n{path}")
+                except ImportError as e:
+                    messagebox.showerror("Módulo faltante", str(e))
+        else: # SPS o RPS
+            if self._df_result is None:
+                messagebox.showwarning("Sin datos", "Ejecuta una comparación primero.")
+                return
+            path = filedialog.asksaveasfilename(
+                defaultextension=".xlsx",
+                filetypes=[("Excel", "*.xlsx")],
+                initialfile=f"comparativa_{mode.split()[-1].lower()}.xlsx")
+            if path:
+                try:
+                    with pd.ExcelWriter(path, engine='openpyxl') as writer:
+                        self._df_result.to_excel(writer, sheet_name="Diferencias", index=False)
+                        ws = writer.sheets["Diferencias"]
+                        aplicar_estilo_hoja(ws, "0F2942")
+                    self.lbl_bottom_status.configure(text=f"Reporte Excel guardado: {os.path.basename(path)}")
+                    messagebox.showinfo("Exportación Exitosa", f"El archivo Excel ha sido generado con éxito:\n{path}")
+                except Exception as e:
+                    messagebox.showerror("Error", f"No se pudo guardar el archivo Excel: {str(e)}")
 
     def _on_export_txt_completo(self):
-        if not self._result:
-            messagebox.showwarning("Sin datos", "Ejecuta una comparación primero.")
-            return
-        path = filedialog.asksaveasfilename(
-            defaultextension=".txt",
-            filetypes=[("Texto", "*.txt")],
-            initialfile="comparativa_completa.txt")
-        if path:
-            export_comparativa(self._result, path)
-            self.lbl_bottom_status.configure(text=f"Comparativa completa guardada: {os.path.basename(path)}")
+        mode = self.segmented_selector.get()
+        if mode == "Individual XPS":
+            if not self._result:
+                messagebox.showwarning("Sin datos", "Ejecuta una comparación primero.")
+                return
+            path = filedialog.asksaveasfilename(
+                defaultextension=".txt",
+                filetypes=[("Texto", "*.txt")],
+                initialfile="comparativa_completa.txt")
+            if path:
+                export_comparativa(self._result, path)
+                self.lbl_bottom_status.configure(text=f"Comparativa completa guardada: {os.path.basename(path)}")
+        else:
+            messagebox.showinfo("Información", "La exportación completa de TXT solo está disponible para comparaciones estructurales XPS.")
 
     def _on_export_txt_diff(self):
-        if not self._result:
-            messagebox.showwarning("Sin datos", "Ejecuta una comparación primero.")
-            return
-        path = filedialog.asksaveasfilename(
-            defaultextension=".txt",
-            filetypes=[("Texto", "*.txt")],
-            initialfile="reporte_diferencias.txt")
-        if path:
-            export_txt(self._result, path)
-            self.lbl_bottom_status.configure(text=f"Reporte de diferencias guardado: {os.path.basename(path)}")
+        mode = self.segmented_selector.get()
+        if mode == "Individual XPS":
+            if not self._result:
+                messagebox.showwarning("Sin datos", "Ejecuta una comparación primero.")
+                return
+            path = filedialog.asksaveasfilename(
+                defaultextension=".txt",
+                filetypes=[("Texto", "*.txt")],
+                initialfile="reporte_diferencias.txt")
+            if path:
+                export_txt(self._result, path)
+                self.lbl_bottom_status.configure(text=f"Reporte de diferencias guardado: {os.path.basename(path)}")
+        else:
+            if self._df_result is None:
+                messagebox.showwarning("Sin datos", "Ejecuta una comparación primero.")
+                return
+            path = filedialog.asksaveasfilename(
+                defaultextension=".txt",
+                filetypes=[("Texto", "*.txt")],
+                initialfile=f"diferencias_{mode.split()[-1].lower()}.txt")
+            if path:
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(f"REPORTE DE DIFERENCIAS {mode.split()[-1]}\n")
+                    f.write("=" * 72 + "\n\n")
+                    for _, row in self._df_result.iterrows():
+                        f.write(f"Línea {row['linea']}  Punto {row['punto']}: {row['Tipo de Cambio']}\n")
+                        f.write(f"  {format_diff_row(row, mode)}\n\n")
+                self.lbl_bottom_status.configure(text=f"Reporte de diferencias guardado: {os.path.basename(path)}")

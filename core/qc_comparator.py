@@ -338,6 +338,15 @@ def comparar_sin_merge(df_base, df_nuevo, key_cols, coord_cols=None):
         return pd.DataFrame()
     return pd.DataFrame(diferencias)
 
+def obtener_prefijo_sheet(nombre, datos):
+    xps_path = datos['rutas'].get('xps')
+    if xps_path:
+        parent_dir = os.path.dirname(xps_path)
+        folder_name = os.path.basename(parent_dir)
+        if folder_name and folder_name.strip() != "":
+            return folder_name
+    return nombre
+
 def exportar_excel_completo(paquetes, diferencias, xps_comparaciones=None, nombre_salida="comparacion_paquetes.xlsx"):
     """Exporta a Excel: resumen, datos originales de cada paquete (con encabezados descriptivos) y diferencias."""
     # Si el archivo está abierto, agregar un número al nombre
@@ -350,6 +359,7 @@ def exportar_excel_completo(paquetes, diferencias, xps_comparaciones=None, nombr
                 # Hoja de resumen
                 resumen = []
                 for nombre, datos in paquetes.items():
+                    prefijo = obtener_prefijo_sheet(nombre, datos)
                     rps_len = len(datos['rps'])
                     sps_len = len(datos['sps'])
                     xps_len = len(datos['xps'])
@@ -365,7 +375,7 @@ def exportar_excel_completo(paquetes, diferencias, xps_comparaciones=None, nombr
                     export_status = "Completo" if not status_parts else "Parcial (" + ", ".join(status_parts) + ")"
                     
                     resumen.append({
-                        'Paquete': nombre,
+                        'Paquete': prefijo,
                         'Carpeta': datos['carpeta'],
                         'Archivo RPS': datos['archivos']['rps'] or 'No encontrado',
                         'Archivo SPS': datos['archivos']['sps'] or 'No encontrado',
@@ -381,26 +391,27 @@ def exportar_excel_completo(paquetes, diferencias, xps_comparaciones=None, nombr
                 
                 # Datos originales de cada paquete (por tipo) con encabezados descriptivos (si no exceden el límite de filas)
                 for nombre, datos in paquetes.items():
+                    prefijo = obtener_prefijo_sheet(nombre, datos)
                     limite_export = 100000
                     # RPS
                     if not datos['rps'].empty and len(datos['rps']) <= limite_export:
                         df = datos['rps'].copy()
                         df.rename(columns=ENCABEZADOS_RPS, inplace=True)
-                        sheet_name = f"{nombre}_RPS"[:31]
+                        sheet_name = f"{prefijo}_RPS"[:31]
                         df.to_excel(writer, sheet_name=sheet_name, index=False)
                         aplicar_estilo_hoja(writer.sheets[sheet_name], '2F5597')
                     # SPS
                     if not datos['sps'].empty and len(datos['sps']) <= limite_export:
                         df = datos['sps'].copy()
                         df.rename(columns=ENCABEZADOS_SPS, inplace=True)
-                        sheet_name = f"{nombre}_SPS"[:31]
+                        sheet_name = f"{prefijo}_SPS"[:31]
                         df.to_excel(writer, sheet_name=sheet_name, index=False)
                         aplicar_estilo_hoja(writer.sheets[sheet_name], '375623')
                     # XPS
                     if not datos['xps'].empty and len(datos['xps']) <= limite_export:
                         df = datos['xps'].copy()
                         df.rename(columns=ENCABEZADOS_XPS, inplace=True)
-                        sheet_name = f"{nombre}_XPS"[:31]
+                        sheet_name = f"{prefijo}_XPS"[:31]
                         df.to_excel(writer, sheet_name=sheet_name, index=False)
                         aplicar_estilo_hoja(writer.sheets[sheet_name], '595959')
                 
