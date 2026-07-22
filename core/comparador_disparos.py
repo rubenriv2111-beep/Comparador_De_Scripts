@@ -401,10 +401,10 @@ def export_xlsx(result: dict, path: str):
     }
     LINE_MISS_STYLE = ("miss_bg", "miss_fg")   # naranja para líneas faltantes
     STATUS_LABEL = {
-        "ok":    "✔ Idéntico",
-        "diff":  "⚠ Con diferencias",
-        "only1": "✖ Solo en Archivo 1",
-        "only2": "✖ Solo en Archivo 2",
+        "ok":    "Identico",
+        "diff":  "Con diferencias",
+        "only1": "Solo en Archivo 1",
+        "only2": "Solo en Archivo 2",
     }
 
     _side = Side(style="thin", color=HEX["border"])
@@ -423,13 +423,13 @@ def export_xlsx(result: dict, path: str):
         cell.border    = _border
 
     def fmt_estacas(lst):
-        if not lst: return "—"
+        if not lst: return "-"
         def _n(x):
             try: return float(x)
             except: return 0
         ini = min((e[0] for e in lst), key=_n)
         fin = max((e[1] for e in lst), key=_n)
-        return f"{ini} → {fin}" if len(lst) == 1 else f"{ini} → {fin}  ({len(lst)} rangos)"
+        return f"{ini} -> {fin}" if len(lst) == 1 else f"{ini} -> {fin}  ({len(lst)} rangos)"
 
     HEADERS = ["DISPARO", "ESTADO DISPARO", "LÍNEA",
                "ESTACAS ARCHIVO 1", "ESTACAS ARCHIVO 2",
@@ -470,7 +470,7 @@ def export_xlsx(result: dict, path: str):
             d_lbl = STATUS_LABEL.get(s, s)
 
             if s in ("only1", "only2"):
-                row_vals = [shot["disparo"], d_lbl, "—", "—", "—", "—", ""]
+                row_vals = [shot["disparo"], d_lbl, "-", "-", "-", "-", ""]
                 ws.append(row_vals)
                 r = ws.max_row
                 ws.row_dimensions[r].height = 18
@@ -490,12 +490,12 @@ def export_xlsx(result: dict, path: str):
                     ls_bk, ls_fk = STATUS_STYLE.get(ls, ("alt_bg", "1A1917"))
                 l_bg, l_fg = HEX[ls_bk], HEX[ls_fk]
                 l_lbl = STATUS_LABEL.get(ls, ls)
-                e1 = fmt_estacas(lr["estacas1"]) if lr["estacas1"] else "—"
-                e2 = fmt_estacas(lr["estacas2"]) if lr["estacas2"] else "—"
+                e1 = fmt_estacas(lr["estacas1"]) if lr["estacas1"] else "-"
+                e2 = fmt_estacas(lr["estacas2"]) if lr["estacas2"] else "-"
                 parts = []
                 for ed in lr["estaca_diffs"]:
                     a = "Arch.1" if ed["tipo"] == "solo_arch1" else "Arch.2"
-                    parts.append(f"Solo {a}: {ed['ini']}→{ed['fin']}")
+                    parts.append(f"Solo {a}: {ed['ini']} -> {ed['fin']}")
                 diffs_txt = "  |  ".join(parts)
 
                 alt = not alt
@@ -568,7 +568,7 @@ def export_xlsx(result: dict, path: str):
     rows_sum = [
         ("Disparos en Archivo 1",             n1,     ""),
         ("Disparos en Archivo 2",             n2,
-         "⚠ Cantidades distintas" if n1 != n2 else "✔ Coinciden"),
+         "Cantidades distintas" if n1 != n2 else "Coinciden"),
         ("Disparos idénticos",                nok,    ""),
         ("Disparos con difs. líneas/estacas", ndiff,  ""),
         ("Solo en Archivo 1",                 nmiss1, ""),

@@ -874,7 +874,7 @@ class App(ctk.CTk):
         header = ctk.CTkFrame(f, fg_color="transparent")
         header.pack(fill="x", pady=(0, 15))
         
-        lbl_title = ctk.CTkLabel(header, text="ANALIZADOR DE LOGS BOOM BOX (LOTES) 💥", font=FONT_H1)
+        lbl_title = ctk.CTkLabel(header, text="ANALIZADOR DE LOGS BOOM BOX (LOTES) 批量 Boom Box 日志分析器 ", font=FONT_H1)
         lbl_title.pack(anchor="w")
         lbl_desc = ctk.CTkLabel(header, text="Módulo de procesamiento por lotes para extracción de metadatos de múltiples logs de Sercel Boom Box.", font=FONT_SM, text_color=COLORS["muted_light"])
         lbl_desc.pack(anchor="w")
@@ -1244,15 +1244,15 @@ class App(ctk.CTk):
             return True, ""
 
         try:
-            with open(path, "r", errors="replace") as f:
-                for _ in range(50):
+            with open(path, "r", encoding="utf-8-sig", errors="ignore") as f:
+                for _ in range(1000):
                     line = f.readline()
                     if not line: break
                     line = line.strip()
                     if not line: continue
-                    if line.startswith("H"):
+                    if line.upper().startswith("H"):
                         continue
-                    if line.startswith(tipo_letra):
+                    if line.upper().startswith(tipo_letra.upper()):
                         return True, ""
             
             return False, f"El archivo no contiene registros válidos que comiencen con la letra '{tipo_letra}' correspondiente al modo '{modo}'."

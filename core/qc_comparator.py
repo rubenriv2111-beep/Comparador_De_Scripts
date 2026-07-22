@@ -347,15 +347,38 @@ def obtener_prefijo_sheet(nombre, datos):
             return folder_name
     return nombre
 
+def generar_nombre_hoja(prefijo, tipo, hojas_existentes):
+    """
+    Genera un nombre de hoja único y válido para Excel (máximo 31 caracteres) que:
+    1. Conserve siempre el sufijo del tipo ('_RPS', '_SPS', '_XPS').
+    2. Recorte el prefijo si excede el espacio disponible.
+    3. Garantice que el nombre sea único en el libro (usando contador si hay colisión).
+    """
+    sufijo = f"_{tipo.strip()}" if not tipo.startswith('_') else tipo.strip()
+    max_len_prefijo = 31 - len(sufijo)
+    base_prefijo = prefijo[:max_len_prefijo].strip()
+    candidato = f"{base_prefijo}{sufijo}"
+    
+    contador = 1
+    while candidato in hojas_existentes:
+        tag = f"_{contador}"
+        max_pre = 31 - len(sufijo) - len(tag)
+        candidato = f"{prefijo[:max_pre].strip()}{tag}{sufijo}"
+        contador += 1
+        
+    hojas_existentes.add(candidato)
+    return candidato
+
 def exportar_excel_completo(paquetes, diferencias, xps_comparaciones=None, nombre_salida="comparacion_paquetes.xlsx"):
     """Exporta a Excel: resumen, datos originales de cada paquete (con encabezados descriptivos) y diferencias."""
-    # Si el archivo está abierto, agregar un número al nombre
     base, ext = os.path.splitext(nombre_salida)
     contador = 1
     nombre_final = nombre_salida
     while True:
         try:
             with pd.ExcelWriter(nombre_final, engine='openpyxl') as writer:
+                hojas_existentes = set()
+                
                 # Hoja de resumen
                 resumen = []
                 for nombre, datos in paquetes.items():
@@ -365,12 +388,13 @@ def exportar_excel_completo(paquetes, diferencias, xps_comparaciones=None, nombr
                     xps_len = len(datos['xps'])
                     
                     status_parts = []
-                    if rps_len > 100000:
-                        status_parts.append("RPS omitido (>100k)")
-                    if sps_len > 100000:
-                        status_parts.append("SPS omitido (>100k)")
-                    if xps_len > 100000:
-                        status_parts.append("XPS omitido (>100k)")
+                    limite_export_res = 1040000
+                    if rps_len > limite_export_res:
+                        status_parts.append("RPS omitido (>1.04M)")
+                    if sps_len > limite_export_res:
+                        status_parts.append("SPS omitido (>1.04M)")
+                    if xps_len > limite_export_res:
+                        status_parts.append("XPS omitido (>1.04M)")
                         
                     export_status = "Completo" if not status_parts else "Parcial (" + ", ".join(status_parts) + ")"
                     
@@ -386,32 +410,34 @@ def exportar_excel_completo(paquetes, diferencias, xps_comparaciones=None, nombr
                         'Exportación Originales': export_status
                     })
                 df_resumen = pd.DataFrame(resumen)
-                df_resumen.to_excel(writer, sheet_name='Resumen Paquetes', index=False)
-                aplicar_estilo_hoja(writer.sheets['Resumen Paquetes'], '1F4E78')
+                sheet_resumen = 'Resumen Paquetes'
+                df_resumen.to_excel(writer, sheet_name=sheet_resumen, index=False)
+                aplicar_estilo_hoja(writer.sheets[sheet_resumen], '1F4E78')
+                hojas_existentes.add(sheet_resumen)
                 
-                # Datos originales de cada paquete (por tipo) con encabezados descriptivos (si no exceden el límite de filas)
+                # Datos originales de cada paquete (por tipo) con encabezados descriptivos
                 for nombre, datos in paquetes.items():
                     prefijo = obtener_prefijo_sheet(nombre, datos)
-                    limite_export = 100000
+                    limite_export = 1040000
                     # RPS
                     if not datos['rps'].empty and len(datos['rps']) <= limite_export:
                         df = datos['rps'].copy()
                         df.rename(columns=ENCABEZADOS_RPS, inplace=True)
-                        sheet_name = f"{prefijo}_RPS"[:31]
+                        sheet_name = generar_nombre_hoja(prefijo, "RPS", hojas_existentes)
                         df.to_excel(writer, sheet_name=sheet_name, index=False)
                         aplicar_estilo_hoja(writer.sheets[sheet_name], '2F5597')
                     # SPS
                     if not datos['sps'].empty and len(datos['sps']) <= limite_export:
                         df = datos['sps'].copy()
                         df.rename(columns=ENCABEZADOS_SPS, inplace=True)
-                        sheet_name = f"{prefijo}_SPS"[:31]
+                        sheet_name = generar_nombre_hoja(prefijo, "SPS", hojas_existentes)
                         df.to_excel(writer, sheet_name=sheet_name, index=False)
                         aplicar_estilo_hoja(writer.sheets[sheet_name], '375623')
                     # XPS
                     if not datos['xps'].empty and len(datos['xps']) <= limite_export:
                         df = datos['xps'].copy()
                         df.rename(columns=ENCABEZADOS_XPS, inplace=True)
-                        sheet_name = f"{prefijo}_XPS"[:31]
+                        sheet_name = generar_nombre_hoja(prefijo, "XPS", hojas_existentes)
                         df.to_excel(writer, sheet_name=sheet_name, index=False)
                         aplicar_estilo_hoja(writer.sheets[sheet_name], '595959')
                 
@@ -504,10 +530,10 @@ def escribir_hojas_comparativa_xps(writer, xps_comparaciones):
     }
     LINE_MISS_STYLE = ("miss_bg", "miss_fg")
     STATUS_LABEL = {
-        "ok":    "✔ Idéntico",
-        "diff":  "⚠ Con diferencias",
-        "only1": "✖ Solo en Archivo 1",
-        "only2": "✖ Solo en Archivo 2",
+        "ok":    "Identico",
+        "diff":  "Con diferencias",
+        "only1": "Solo en Archivo 1",
+        "only2": "Solo en Archivo 2",
     }
     
     _side = Side(style="thin", color=HEX["border"])
@@ -526,13 +552,13 @@ def escribir_hojas_comparativa_xps(writer, xps_comparaciones):
         cell.border    = _border
         
     def fmt_estacas(lst):
-        if not lst: return "—"
+        if not lst: return "-"
         def _n(x):
             try: return float(x)
             except: return 0
         ini = min((e[0] for e in lst), key=_n)
         fin = max((e[1] for e in lst), key=_n)
-        return f"{ini} → {fin}" if len(lst) == 1 else f"{ini} → {fin}  ({len(lst)} rangos)"
+        return f"{ini} -> {fin}" if len(lst) == 1 else f"{ini} -> {fin}  ({len(lst)} rangos)"
 
     HEADERS = ["COMPARATIVA", "DISPARO", "ESTADO DISPARO", "LÍNEA",
                "ESTACAS ARCHIVO 1", "ESTACAS ARCHIVO 2",
@@ -564,7 +590,7 @@ def escribir_hojas_comparativa_xps(writer, xps_comparaciones):
                 d_lbl = STATUS_LABEL.get(s, s)
                 
                 if s in ("only1", "only2"):
-                    row_vals = [par_name, shot["disparo"], d_lbl, "—", "—", "—", "—", ""]
+                    row_vals = [par_name, shot["disparo"], d_lbl, "-", "-", "-", "-", ""]
                     ws.append(row_vals)
                     r = ws.max_row
                     ws.row_dimensions[r].height = 18
@@ -585,12 +611,12 @@ def escribir_hojas_comparativa_xps(writer, xps_comparaciones):
                     l_bg, l_fg = HEX[ls_bk], HEX[ls_fk]
                     l_lbl = STATUS_LABEL.get(ls, ls)
                     
-                    e1 = fmt_estacas(lr["estacas1"]) if lr["estacas1"] else "—"
-                    e2 = fmt_estacas(lr["estacas2"]) if lr["estacas2"] else "—"
+                    e1 = fmt_estacas(lr["estacas1"]) if lr["estacas1"] else "-"
+                    e2 = fmt_estacas(lr["estacas2"]) if lr["estacas2"] else "-"
                     parts = []
                     for ed in lr["estaca_diffs"]:
                         a = "Arch.1" if ed["tipo"] == "solo_arch1" else "Arch.2"
-                        parts.append(f"Solo {a}: {ed['ini']}→{ed['fin']}")
+                        parts.append(f"Solo {a}: {ed['ini']} -> {ed['fin']}")
                     diffs_txt = "  |  ".join(parts)
                     
                     alt = not alt
