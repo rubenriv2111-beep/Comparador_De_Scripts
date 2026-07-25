@@ -628,6 +628,7 @@ class App(ctk.CTk):
         self.single_tabview.pack(fill="both", expand=True, pady=4)
         
         self.tab_single_lines = self.single_tabview.add("Resumen Agregado por Línea")
+        self.tab_single_xps = self.single_tabview.add("Patrón Disparos XPS (Líneas R y Canales)")
         self.tab_single_grid = self.single_tabview.add("Vista Previa de Datos COMPLETOS")
         
         # ── Pestaña 1: Resumen por Línea ──
@@ -642,8 +643,21 @@ class App(ctk.CTk):
         sb_ls_y.pack(side="right", fill="y")
         sb_ls_x.pack(side="bottom", fill="x")
         self.tree_lines_summary.pack(side="left", fill="both", expand=True)
+
+        # ── Pestaña 2: Patrón Disparos XPS ──
+        tree_xp_frame = ctk.CTkFrame(self.tab_single_xps, fg_color="transparent")
+        tree_xp_frame.pack(fill="both", expand=True, padx=8, pady=8)
         
-        # ── Pestaña 2: Vista Previa de Datos Completos (Paginada) ──
+        self.tree_xps_pattern = ttk.Treeview(tree_xp_frame, show="headings", selectmode="browse")
+        sb_xp_y = ttk.Scrollbar(tree_xp_frame, orient="vertical", command=self.tree_xps_pattern.yview)
+        sb_xp_x = ttk.Scrollbar(tree_xp_frame, orient="horizontal", command=self.tree_xps_pattern.xview)
+        self.tree_xps_pattern.configure(yscrollcommand=sb_xp_y.set, xscrollcommand=sb_xp_x.set)
+        
+        sb_xp_y.pack(side="right", fill="y")
+        sb_xp_x.pack(side="bottom", fill="x")
+        self.tree_xps_pattern.pack(side="left", fill="both", expand=True)
+        
+        # ── Pestaña 3: Vista Previa de Datos Completos (Paginada) ──
         grid_top = ctk.CTkFrame(self.tab_single_grid, fg_color="transparent")
         grid_top.pack(fill="x", padx=8, pady=(8, 4))
         
@@ -760,6 +774,7 @@ class App(ctk.CTk):
         stats = res["stats"]
         df_data = res["df_data"]
         df_lines = res["df_line_summary"]
+        df_pattern = res.get("df_xps_pattern", pd.DataFrame())
         
         # Meta Banner
         self.lbl_single_meta_info.configure(
@@ -781,6 +796,9 @@ class App(ctk.CTk):
             
         # Cargar Treeview de Resumen por Línea
         self._populate_lines_summary_tree(df_lines)
+        
+        # Cargar Treeview de Patrón Disparos XPS
+        self._populate_xps_pattern_tree(df_pattern)
         
         # Cargar Paginación de Datos Completos
         self.single_filtered_df = df_data
@@ -804,6 +822,25 @@ class App(ctk.CTk):
         for row in df_lines.itertuples(index=False):
             vals = [f"{v:.1f}" if isinstance(v, float) else str(v) for v in row]
             self.tree_lines_summary.insert("", "end", values=vals)
+
+    def _populate_xps_pattern_tree(self, df_pattern):
+        for col in self.tree_xps_pattern.get_children():
+            self.tree_xps_pattern.delete(col)
+        self.tree_xps_pattern["columns"] = ()
+        
+        if df_pattern is None or df_pattern.empty:
+            return
+            
+        cols = list(df_pattern.columns)
+        self.tree_xps_pattern["columns"] = cols
+        for c in cols:
+            self.tree_xps_pattern.heading(c, text=c)
+            self.tree_xps_pattern.column(c, width=130, anchor="center")
+            
+        for row in df_pattern.itertuples(index=False):
+            vals = [f"{v:.1f}" if isinstance(v, float) else str(v) for v in row]
+            self.tree_xps_pattern.insert("", "end", values=vals)
+
 
     def _on_single_search_changed(self):
         if not self.single_analysis_res or self.single_analysis_res["df_data"].empty:

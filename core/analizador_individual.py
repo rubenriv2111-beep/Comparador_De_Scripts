@@ -61,7 +61,7 @@ def detectar_tipo_archivo_individual(path):
 def analizar_archivo_individual(path, tipo_forzado=None):
     """
     Realiza un análisis estructurado de un solo archivo sísmico (SPS, RPS, XPS) sin comparar.
-    Devuelve un diccionario estructurado con métricas, DataFrames y resumen por líneas.
+    Devuelve un diccionario estructurado con métricas, DataFrames, resumen por líneas y patrón de disparos XPS.
     """
     t_start = time.time()
     
@@ -74,7 +74,6 @@ def analizar_archivo_individual(path, tipo_forzado=None):
     
     tipo = tipo_forzado if (tipo_forzado and tipo_forzado not in ["Automático", None]) else detectar_tipo_archivo_individual(path)
     
-    # Contar total de líneas de texto en el archivo
     total_lines = 0
     with open(path, "r", encoding="utf-8-sig", errors="ignore") as f:
         for _ in f:
@@ -83,6 +82,7 @@ def analizar_archivo_individual(path, tipo_forzado=None):
     df_data = pd.DataFrame()
     stats = {}
     df_line_summary = pd.DataFrame()
+    df_xps_pattern = pd.DataFrame()
     
     if tipo in ["SPS", "RPS"]:
         t_letter = "S" if tipo == "SPS" else "R"
@@ -146,6 +146,28 @@ def analizar_archivo_individual(path, tipo_forzado=None):
                 Lineas_R_Conectadas=('linea_r', 'nunique')
             ).reset_index().rename(columns={'linea_f': 'linea'})
             
+            # Tabla Única Patrón XPS por Disparo (Cálculo de Líneas Receptoras Activadas por evento de Canal 1 a Canal Final)
+            df_xps_pattern = df_data.groupby(['linea_f', 'punto_f', 'evento'], sort=False).agg(
+                Lineas_Receptoras_Activadas=('linea_r', 'nunique'),
+                Primera_Linea_Receptora=('linea_r', 'first'),
+                Ultima_Linea_Receptora=('linea_r', 'last'),
+                Canal_Inicial=('desde', 'min'),
+                Canal_Final=('hasta', 'max'),
+                Primera_Estaca_Receptora=('punto_r', 'first'),
+                Ultima_Estaca_Receptora=('estatico_r', 'last')
+            ).reset_index().rename(columns={
+                'linea_f': 'Línea Fuente',
+                'punto_f': 'Punto Fuente',
+                'evento': 'FFID / Evento',
+                'Lineas_Receptoras_Activadas': 'Líneas R Activadas',
+                'Primera_Linea_Receptora': 'Primera Línea R',
+                'Ultima_Linea_Receptora': 'Última Línea R',
+                'Canal_Inicial': 'Canal Inicial (1)',
+                'Canal_Final': 'Canal Final',
+                'Primera_Estaca_Receptora': 'Primera Estaca R',
+                'Ultima_Estaca_Receptora': 'Última Estaca R'
+            })
+            
             stats = {
                 "total_registros": total_records,
                 "disparos_unicos": disparos_unicos,
@@ -173,7 +195,8 @@ def analizar_archivo_individual(path, tipo_forzado=None):
         "parse_time_ms": t_elapsed_ms,
         "stats": stats,
         "df_data": df_data,
-        "df_line_summary": df_line_summary
+        "df_line_summary": df_line_summary,
+        "df_xps_pattern": df_xps_pattern
     }
 
 
@@ -186,6 +209,7 @@ def exportar_analisis_excel(res_analisis, path_salida):
     stats = res_analisis["stats"]
     df_data = res_analisis["df_data"]
     df_summary = res_analisis["df_line_summary"]
+    df_pattern = res_analisis.get("df_xps_pattern", pd.DataFrame())
     
     base, ext = os.path.splitext(path_salida)
     contador = 1
@@ -224,12 +248,17 @@ def exportar_analisis_excel(res_analisis, path_salida):
                 df_info.to_excel(writer, sheet_name="Resumen_Metricas", index=False)
                 aplicar_estilo_hoja(writer.sheets["Resumen_Metricas"], "0F2942")
                 
-                # ── Hoja 2: Resumen por Línea (si existe) ──
+                # ── Hoja 2: Resumen por Línea ──
                 if not df_summary.empty:
                     df_summary.to_excel(writer, sheet_name="Resumen_por_Linea", index=False)
                     aplicar_estilo_hoja(writer.sheets["Resumen_por_Linea"], "1F4E78")
                     
-                # ── Hoja 3: Datos Transcritos Completos ──
+                # ── Hoja 3: Patrón de Disparos XPS (si es XPS) ──
+                if tipo == "XPS" and not df_pattern.empty:
+                    df_pattern.to_excel(writer, sheet_name="Patron_Disparos_XPS", index=False)
+                    aplicar_estilo_hoja(writer.sheets["Patron_Disparos_XPS"], "005B94")
+                    
+                # ── Hoja 4: Datos Transcritos Completos ──
                 if not df_data.empty and len(df_data) <= 1040000:
                     df_exp = df_data.copy()
                     if tipo == "RPS":
