@@ -531,7 +531,9 @@ def export_xlsx(result: dict, path: str):
 
     # ── Hoja 1: Resumen ──────────────────────────────────────────────────
     ws_r = wb.active
+    assert ws_r is not None
     ws_r.title = "Resumen"
+    assert ws_r is not None
     ws_r.column_dimensions["A"].width = 38
     ws_r.column_dimensions["B"].width = 18
     ws_r.column_dimensions["C"].width = 28

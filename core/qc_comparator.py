@@ -254,7 +254,7 @@ def comparar_carpetas(lista_carpetas, progreso=None):
 
 def comparar_sin_merge(df_base, df_nuevo, key_cols, coord_cols=None):
     """
-    Compara dos DataFrames sin usar pandas.merge (solo diccionarios).
+    Compara dos DataFrames sin usar pandas.merge usando itertuples a alto rendimiento (Nivel Sr.).
     """
     if df_base.empty and df_nuevo.empty:
         return pd.DataFrame()
@@ -266,20 +266,24 @@ def comparar_sin_merge(df_base, df_nuevo, key_cols, coord_cols=None):
         if col not in df_nuevo.columns:
             df_nuevo[col] = ''
     
-    # Convertir a listas de diccionarios
-    base_records = df_base.to_dict('records')
-    new_records = df_nuevo.to_dict('records')
+    cols_base = list(df_base.columns)
+    cols_nuevo = list(df_nuevo.columns)
     
-    # Crear diccionarios clave -> fila completa
+    k_idx_base = [cols_base.index(c) for c in key_cols]
+    k_idx_nuevo = [cols_nuevo.index(c) for c in key_cols]
+    
+    coord_idx_base = {c: cols_base.index(c) for c in (coord_cols or []) if c in cols_base}
+    coord_idx_nuevo = {c: cols_nuevo.index(c) for c in (coord_cols or []) if c in cols_nuevo}
+    
     base_dict = {}
-    for rec in base_records:
-        key = tuple(str(rec.get(col, '')) for col in key_cols)
-        base_dict[key] = rec
-    
+    for row in df_base.itertuples(index=False):
+        key = tuple(str(row[i]) for i in k_idx_base)
+        base_dict[key] = row
+        
     new_dict = {}
-    for rec in new_records:
-        key = tuple(str(rec.get(col, '')) for col in key_cols)
-        new_dict[key] = rec
+    for row in df_nuevo.itertuples(index=False):
+        key = tuple(str(row[i]) for i in k_idx_nuevo)
+        new_dict[key] = row
     
     base_keys = set(base_dict.keys())
     new_keys = set(new_dict.keys())
@@ -292,46 +296,49 @@ def comparar_sin_merge(df_base, df_nuevo, key_cols, coord_cols=None):
     
     # Procesar eliminados
     for key in eliminados:
-        fila = base_dict[key]
-        dif = {col: fila.get(col, '') for col in key_cols}
+        row = base_dict[key]
+        dif = {col: row[cols_base.index(col)] for col in key_cols}
         dif['Tipo de Cambio'] = 'Eliminado'
         if coord_cols:
             for col in coord_cols:
-                if col in fila:
-                    dif[col + '_base'] = fila[col]
+                if col in coord_idx_base:
+                    dif[col + '_base'] = row[coord_idx_base[col]]
         diferencias.append(dif)
     
     # Procesar nuevos
     for key in nuevos:
-        fila = new_dict[key]
-        dif = {col: fila.get(col, '') for col in key_cols}
+        row = new_dict[key]
+        dif = {col: row[cols_nuevo.index(col)] for col in key_cols}
         dif['Tipo de Cambio'] = 'Nuevo'
         if coord_cols:
             for col in coord_cols:
-                if col in fila:
-                    dif[col + '_nuevo'] = fila[col]
+                if col in coord_idx_nuevo:
+                    dif[col + '_nuevo'] = row[coord_idx_nuevo[col]]
         diferencias.append(dif)
     
     # Procesar cambios de coordenadas
     if coord_cols and comunes:
         for key in comunes:
-            fila_base = base_dict[key]
-            fila_nuevo = new_dict[key]
+            row_b = base_dict[key]
+            row_n = new_dict[key]
             cambio = False
             for col in coord_cols:
-                base_val = fila_base.get(col)
-                nuevo_val = fila_nuevo.get(col)
-                if pd.isna(base_val) and pd.isna(nuevo_val):
-                    continue
-                if base_val != nuevo_val:
-                    cambio = True
-                    break
+                if col in coord_idx_base and col in coord_idx_nuevo:
+                    b_val = row_b[coord_idx_base[col]]
+                    n_val = row_n[coord_idx_nuevo[col]]
+                    if pd.isna(b_val) and pd.isna(n_val):
+                        continue
+                    if b_val != n_val:
+                        cambio = True
+                        break
             if cambio:
-                dif = {col: fila_base.get(col, '') for col in key_cols}
+                dif = {col: row_b[cols_base.index(col)] for col in key_cols}
                 dif['Tipo de Cambio'] = 'Cambio de Coordenada'
                 for col in coord_cols:
-                    dif[col + '_base'] = fila_base.get(col)
-                    dif[col + '_nuevo'] = fila_nuevo.get(col)
+                    if col in coord_idx_base:
+                        dif[col + '_base'] = row_b[coord_idx_base[col]]
+                    if col in coord_idx_nuevo:
+                        dif[col + '_nuevo'] = row_n[coord_idx_nuevo[col]]
                 diferencias.append(dif)
     
     if not diferencias:

@@ -17,6 +17,7 @@ from core.qc_comparator import comparar_carpetas, comparar_sin_merge, aplicar_es
 from utils.progreso import Progreso
 from core.comparador_disparos import run_comparison, export_xlsx, export_txt, export_comparativa
 from core.lectores import leer_sps_rps
+from core.analizador_individual import analizar_archivo_individual, exportar_analisis_excel, exportar_analisis_txt
 
 # Configuración inicial del tema CustomTkinter
 ctk.set_appearance_mode("Light")
@@ -108,6 +109,11 @@ def crear_icono_diseno(tipo, color_hex="#FFFFFF"):
     elif tipo == "file":
         # Archivo
         draw.polygon([(4,3), (15,3), (20,8), (20,20), (4,20)], outline=color_rgb, fill=None)
+    elif tipo in ["analizador", "analizador_ind"]:
+        # Documento con gráfico de líneas/barras y lupa analítica
+        draw.polygon([(4,3), (15,3), (20,8), (20,20), (4,20)], outline=color_rgb, width=2)
+        draw.line([7, 15, 10, 11, 13, 14, 17, 9], fill=color_rgb, width=2)
+        draw.ellipse([11, 11, 18, 18], outline=color_rgb, width=2)
     elif tipo == "lupita":
         # Lente de la lupa (círculo)
         draw.ellipse([4, 4, 14, 14], outline=color_rgb, width=2)
@@ -414,6 +420,7 @@ class App(ctk.CTk):
         self.nav_buttons = {}
         sections = [
             ("dashboard", "Dashboard Principal", "dashboard"),
+            ("analizador_ind", "Analizador Individual", "analizador_ind"),
             ("comparador", "Comparador Estructural", "comparador"),
             ("boombox", "Analizar Boom Box", "lupita"),
             ("mapas", "Generador de Mapas", "mapas"),
@@ -446,6 +453,7 @@ class App(ctk.CTk):
         
         self.frames = {
             "dashboard": ctk.CTkFrame(self.main_area, fg_color="transparent"),
+            "analizador_ind": ctk.CTkFrame(self.main_area, fg_color="transparent"),
             "comparador": ctk.CTkFrame(self.main_area, fg_color="transparent"),
             "boombox": ctk.CTkFrame(self.main_area, fg_color="transparent"),
             "mapas": ctk.CTkFrame(self.main_area, fg_color="transparent"),
@@ -453,6 +461,7 @@ class App(ctk.CTk):
         }
         
         self._build_screen_dashboard()
+        self._build_screen_analizador_individual()
         self._build_screen_comparador()
         self._build_screen_boombox()
         self._build_screen_mapas()
@@ -543,9 +552,386 @@ class App(ctk.CTk):
             
         self.card_lfiles.set("SPS, RPS, XPS", COLORS["accent"])
 
+    # ──────────────────────────────────────────────────────────────────────────
+    # PANEL 2: ANALIZADOR INDIVIDUAL (SIN COMPARAR)
+    # ──────────────────────────────────────────────────────────────────────────
+    def _build_screen_analizador_individual(self):
+        f = self.frames["analizador_ind"]
+        
+        # Variables de control interno para la paginación y análisis individual
+        self.single_analysis_res = None
+        self.single_filtered_df = pd.DataFrame()
+        self.single_page_index = 0
+        self.single_page_size = 250
+        
+        header = ctk.CTkFrame(f, fg_color="transparent")
+        header.pack(fill="x", pady=(0, 10))
+        
+        lbl_title = ctk.CTkLabel(header, text="ANALIZADOR INDIVIDUAL DE ARCHIVOS 单个文件分析器 ", font=FONT_H1)
+        lbl_title.pack(anchor="w")
+        lbl_desc = ctk.CTkLabel(header, text="Análisis detallado, control de estacas y métricas para un solo archivo SPS, RPS o XPS.", font=FONT_SM, text_color=COLORS["muted_light"])
+        lbl_desc.pack(anchor="w")
+        
+        # Tarjeta de Selección de Archivo y Formato
+        card_sel = ctk.CTkFrame(f, corner_radius=10, border_width=1, fg_color=COLORS["surface_light"], border_color=COLORS["border_light"])
+        card_sel.pack(fill="x", pady=4)
+        
+        self.single_file_selector = CTkFileSelector(card_sel, "Seleccionar Archivo a Analizar (SPS, RPS, XPS):", callback_change=self._auto_detect_single_format)
+        self.single_file_selector.pack(fill="x", padx=20, pady=(12, 6))
+        
+        fmt_frame = ctk.CTkFrame(card_sel, fg_color="transparent")
+        fmt_frame.pack(fill="x", padx=20, pady=(0, 10))
+        
+        lbl_fmt = ctk.CTkLabel(fmt_frame, text="Formato del Archivo:", font=FONT_BOLD, text_color=COLORS["accent"])
+        lbl_fmt.pack(side="left", padx=(0, 10))
+        
+        self.single_format_var = ctk.StringVar(value="Automático")
+        self.single_segmented_fmt = ctk.CTkSegmentedButton(
+            fmt_frame,
+            values=["Automático", "SPS (Fuentes)", "RPS (Receptores)", "XPS (Relaciones)"],
+            font=FONT_BOLD, height=32, variable=self.single_format_var
+        )
+        self.single_segmented_fmt.pack(side="left", fill="x", expand=True)
+        
+        self.btn_run_single = ctk.CTkButton(
+            card_sel, text="EJECUTAR ANÁLISIS DE ARCHIVO SÍSMICO", font=FONT_H2,
+            fg_color=COLORS["accent"], hover_color=COLORS["accent_hover"],
+            height=42, corner_radius=8, command=self._on_execute_single_analysis
+        )
+        self.btn_run_single.pack(fill="x", padx=20, pady=(0, 12))
+        
+        # Banner de Metadatos del Archivo Procesado
+        self.single_meta_banner = ctk.CTkFrame(f, height=36, corner_radius=6, fg_color=COLORS["surface_light"], border_width=1, border_color=COLORS["border_light"])
+        self.single_meta_banner.pack(fill="x", pady=4)
+        
+        self.lbl_single_meta_info = ctk.CTkLabel(self.single_meta_banner, text="Ningún archivo analizado todavía.", font=FONT_SM, text_color=COLORS["muted_light"])
+        self.lbl_single_meta_info.pack(side="left", padx=12, pady=6)
+        
+        # Tarjetas KPI de Métricas Clave
+        self.single_kpi_bar = ctk.CTkFrame(f, fg_color="transparent")
+        self.single_kpi_bar.pack(fill="x", pady=4)
+        
+        self.card_s_records = CTkKPICard(self.single_kpi_bar, "Total Registros", "—")
+        self.card_s_records.pack(side="left", expand=True, fill="x", padx=(0, 8))
+        
+        self.card_s_lines = CTkKPICard(self.single_kpi_bar, "Líneas Únicas", "—")
+        self.card_s_lines.pack(side="left", expand=True, fill="x", padx=(0, 8))
+        
+        self.card_s_range = CTkKPICard(self.single_kpi_bar, "Rango Principal / Canales", "—")
+        self.card_s_range.pack(side="left", expand=True, fill="x", padx=(0, 8))
+        
+        self.card_s_extra = CTkKPICard(self.single_kpi_bar, "Puntos / Disparos", "—")
+        self.card_s_extra.pack(side="left", expand=True, fill="x")
+        
+        # Pestañas de Resultados
+        self.single_tabview = ctk.CTkTabview(f, height=380, corner_radius=10)
+        self.single_tabview.pack(fill="both", expand=True, pady=4)
+        
+        self.tab_single_lines = self.single_tabview.add("Resumen Agregado por Línea")
+        self.tab_single_grid = self.single_tabview.add("Vista Previa de Datos COMPLETOS")
+        
+        # ── Pestaña 1: Resumen por Línea ──
+        tree_ls_frame = ctk.CTkFrame(self.tab_single_lines, fg_color="transparent")
+        tree_ls_frame.pack(fill="both", expand=True, padx=8, pady=8)
+        
+        self.tree_lines_summary = ttk.Treeview(tree_ls_frame, show="headings", selectmode="browse")
+        sb_ls_y = ttk.Scrollbar(tree_ls_frame, orient="vertical", command=self.tree_lines_summary.yview)
+        sb_ls_x = ttk.Scrollbar(tree_ls_frame, orient="horizontal", command=self.tree_lines_summary.xview)
+        self.tree_lines_summary.configure(yscrollcommand=sb_ls_y.set, xscrollcommand=sb_ls_x.set)
+        
+        sb_ls_y.pack(side="right", fill="y")
+        sb_ls_x.pack(side="bottom", fill="x")
+        self.tree_lines_summary.pack(side="left", fill="both", expand=True)
+        
+        # ── Pestaña 2: Vista Previa de Datos Completos (Paginada) ──
+        grid_top = ctk.CTkFrame(self.tab_single_grid, fg_color="transparent")
+        grid_top.pack(fill="x", padx=8, pady=(8, 4))
+        
+        ctk.CTkLabel(grid_top, text="Buscar en datos:", font=FONT_BOLD).pack(side="left", padx=(0, 6))
+        
+        self.single_search_var = tk.StringVar()
+        self.single_search_var.trace_add("write", lambda *_: self._on_single_search_changed())
+        self.ent_single_search = ctk.CTkEntry(grid_top, placeholder_text="Filtrar registros...", textvariable=self.single_search_var, font=FONT_SM, width=200, height=30)
+        self.ent_single_search.pack(side="left", padx=(0, 15))
+        
+        ctk.CTkLabel(grid_top, text="Filas por página:", font=FONT_SM).pack(side="left", padx=(0, 6))
+        self.combo_single_pagesize = ctk.CTkOptionMenu(
+            grid_top, values=["250", "500", "1000", "2500", "Todos"], font=FONT_SM, width=100, height=30,
+            command=self._on_single_pagesize_changed
+        )
+        self.combo_single_pagesize.pack(side="left")
+        self.combo_single_pagesize.set("250")
+        
+        tree_grid_frame = ctk.CTkFrame(self.tab_single_grid, fg_color="transparent")
+        tree_grid_frame.pack(fill="both", expand=True, padx=8, pady=4)
+        
+        self.tree_single_data = ttk.Treeview(tree_grid_frame, show="headings", selectmode="browse")
+        sb_sd_y = ttk.Scrollbar(tree_grid_frame, orient="vertical", command=self.tree_single_data.yview)
+        sb_sd_x = ttk.Scrollbar(tree_grid_frame, orient="horizontal", command=self.tree_single_data.xview)
+        self.tree_single_data.configure(yscrollcommand=sb_sd_y.set, xscrollcommand=sb_sd_x.set)
+        
+        sb_sd_y.pack(side="right", fill="y")
+        sb_sd_x.pack(side="bottom", fill="x")
+        self.tree_single_data.pack(side="left", fill="both", expand=True)
+        
+        pag_bar = ctk.CTkFrame(self.tab_single_grid, fg_color="transparent")
+        pag_bar.pack(fill="x", padx=8, pady=(4, 8))
+        
+        self.btn_single_prev = ctk.CTkButton(pag_bar, text="◄ Anterior", font=FONT_SM, width=90, height=28, command=self._on_single_page_prev)
+        self.btn_single_prev.pack(side="left", padx=4)
+        
+        self.lbl_single_page_info = ctk.CTkLabel(pag_bar, text="Página 0 de 0 (0 registros)", font=FONT_SM)
+        self.lbl_single_page_info.pack(side="left", padx=10)
+        
+        self.btn_single_next = ctk.CTkButton(pag_bar, text="Siguiente ►", font=FONT_SM, width=90, height=28, command=self._on_single_page_next)
+        self.btn_single_next.pack(side="left", padx=4)
+        
+        # Barra de Botones de Exportación
+        exp_bar = ctk.CTkFrame(f, fg_color="transparent")
+        exp_bar.pack(fill="x", pady=(4, 0))
+        
+        self.btn_exp_single_xlsx = ctk.CTkButton(exp_bar, text="Exportar Excel (.xlsx)", font=FONT_SM, height=34,
+                                                 fg_color=COLORS["ok_row"], text_color=COLORS["ok_txt"], hover_color="#C2DFB9",
+                                                 command=self._on_export_single_excel)
+        self.btn_exp_single_xlsx.pack(side="right", padx=(6, 0))
+        
+        self.btn_exp_single_txt = ctk.CTkButton(exp_bar, text="Exportar Reporte TXT", font=FONT_SM, height=34,
+                                                fg_color=COLORS["col_hdr"], text_color=COLORS["text_light"], hover_color="#CBD5E1",
+                                                command=self._on_export_single_txt)
+        self.btn_exp_single_txt.pack(side="right", padx=(6, 0))
+        
+        self.btn_exp_single_csv = ctk.CTkButton(exp_bar, text="Exportar CSV Clean", font=FONT_SM, height=34,
+                                                fg_color=COLORS["diff_row"], text_color=COLORS["diff_txt"], hover_color="#FEDFA4",
+                                                command=self._on_export_single_csv)
+        self.btn_exp_single_csv.pack(side="right")
+
+    def _auto_detect_single_format(self, path):
+        if not path:
+            return
+        ext = os.path.splitext(path)[1].lower()
+        if ext == ".sps":
+            self.single_segmented_fmt.set("SPS (Fuentes)")
+        elif ext in [".rps", ".rcp"]:
+            self.single_segmented_fmt.set("RPS (Receptores)")
+        elif ext == ".xps":
+            self.single_segmented_fmt.set("XPS (Relaciones)")
+        elif ext == ".txt":
+            self.single_segmented_fmt.set("Automático")
+
+    def _on_execute_single_analysis(self):
+        path = ""
+        if hasattr(self, "single_file_selector"):
+            path = self.single_file_selector.get()
+            if not path and hasattr(self.single_file_selector, "entry_path"):
+                path = self.single_file_selector.entry_path.get()
+        path = path.strip() if path else ""
+
+        if not path or not os.path.exists(path):
+            messagebox.showerror("Error de Selección", "Por favor seleccione un archivo válido para analizar.")
+            return
+            
+        fmt_val = self.single_format_var.get()
+        tipo_map = {
+            "Automático": None,
+            "SPS (Fuentes)": "SPS",
+            "RPS (Receptores)": "RPS",
+            "XPS (Relaciones)": "XPS"
+        }
+        tipo_forzado = tipo_map.get(fmt_val)
+        
+        self.btn_run_single.configure(state="disabled", text="ANALIZANDO DATOS...")
+        self.lbl_single_meta_info.configure(text=f"Analizando: {os.path.basename(path)}...", text_color=COLORS["accent"])
+        
+        def run_thread():
+            try:
+                res = analizar_archivo_individual(path, tipo_forzado=tipo_forzado)
+                self.after(0, lambda: self._render_single_analysis_results(res))
+            except Exception as e:
+                self.after(0, lambda: messagebox.showerror("Error en Análisis", f"Ocurrió un error al analizar el archivo:\n{e}"))
+            finally:
+                self.after(0, lambda: self.btn_run_single.configure(state="normal", text="EJECUTAR ANÁLISIS DE ARCHIVO SÍSMICO"))
+
+        threading.Thread(target=run_thread, daemon=True).start()
+
+    def _render_single_analysis_results(self, res):
+        self.single_analysis_res = res
+        
+        tipo = res["tipo_detectado"]
+        stats = res["stats"]
+        df_data = res["df_data"]
+        df_lines = res["df_line_summary"]
+        
+        # Meta Banner
+        self.lbl_single_meta_info.configure(
+            text=f"Archivo: {res['file_name']} | Tipo: {tipo} | Tamaño: {res['file_size_mb']:.2f} MB | Líneas totales: {res['total_lines']} | Parse Time: {res['parse_time_ms']:.1f} ms",
+            text_color=COLORS["text_light"]
+        )
+        
+        # KPI Cards
+        self.card_s_records.set(f"{stats.get('total_registros', 0):,}", COLORS["accent"])
+        
+        if tipo in ["SPS", "RPS"]:
+            self.card_s_lines.set(f"{stats.get('total_lineas', 0):,}", COLORS["accent"])
+            self.card_s_range.set(f"X: {stats.get('x_min', 0):.0f} a {stats.get('x_max', 0):.0f}", COLORS["accent"])
+            self.card_s_extra.set(f"Z Prom: {stats.get('z_mean', 0):.1f}m", COLORS["accent"])
+        elif tipo == "XPS":
+            self.card_s_lines.set(f"F: {stats.get('lineas_f_unicas', 0)} / R: {stats.get('lineas_r_unicas', 0)}", COLORS["accent"])
+            self.card_s_range.set(f"Canales: {stats.get('canal_min', 0)} a {stats.get('canal_max', 0)}", COLORS["accent"])
+            self.card_s_extra.set(f"Disparos: {stats.get('disparos_unicos', 0):,}", COLORS["accent"])
+            
+        # Cargar Treeview de Resumen por Línea
+        self._populate_lines_summary_tree(df_lines)
+        
+        # Cargar Paginación de Datos Completos
+        self.single_filtered_df = df_data
+        self.single_page_index = 0
+        self._update_single_data_page()
+
+    def _populate_lines_summary_tree(self, df_lines):
+        for col in self.tree_lines_summary.get_children():
+            self.tree_lines_summary.delete(col)
+        self.tree_lines_summary["columns"] = ()
+        
+        if df_lines is None or df_lines.empty:
+            return
+            
+        cols = list(df_lines.columns)
+        self.tree_lines_summary["columns"] = cols
+        for c in cols:
+            self.tree_lines_summary.heading(c, text=c)
+            self.tree_lines_summary.column(c, width=110, anchor="center")
+            
+        for row in df_lines.itertuples(index=False):
+            vals = [f"{v:.1f}" if isinstance(v, float) else str(v) for v in row]
+            self.tree_lines_summary.insert("", "end", values=vals)
+
+    def _on_single_search_changed(self):
+        if not self.single_analysis_res or self.single_analysis_res["df_data"].empty:
+            return
+        query = self.single_search_var.get().strip().lower()
+        df_full = self.single_analysis_res["df_data"]
+        
+        if not query:
+            self.single_filtered_df = df_full
+        else:
+            mask = df_full.astype(str).apply(lambda row: query in " ".join(row).lower(), axis=1)
+            self.single_filtered_df = df_full[mask]
+            
+        self.single_page_index = 0
+        self._update_single_data_page()
+
+    def _on_single_pagesize_changed(self, value):
+        if value == "Todos":
+            self.single_page_size = 9999999
+        else:
+            self.single_page_size = int(value)
+        self.single_page_index = 0
+        self._update_single_data_page()
+
+    def _on_single_page_prev(self):
+        if self.single_page_index > 0:
+            self.single_page_index -= 1
+            self._update_single_data_page()
+
+    def _on_single_page_next(self):
+        total_rows = len(self.single_filtered_df)
+        max_page = math.ceil(total_rows / self.single_page_size) - 1
+        if self.single_page_index < max_page:
+            self.single_page_index += 1
+            self._update_single_data_page()
+
+    def _update_single_data_page(self):
+        for item in self.tree_single_data.get_children():
+            self.tree_single_data.delete(item)
+            
+        df = self.single_filtered_df
+        total_rows = len(df)
+        
+        if total_rows == 0:
+            self.lbl_single_page_info.configure(text="Página 0 de 0 (0 registros)")
+            self.btn_single_prev.configure(state="disabled")
+            self.btn_single_next.configure(state="disabled")
+            return
+            
+        page_size = self.single_page_size
+        max_pages = math.ceil(total_rows / page_size)
+        self.single_page_index = min(self.single_page_index, max_pages - 1)
+        
+        start_idx = self.single_page_index * page_size
+        end_idx = min(start_idx + page_size, total_rows)
+        
+        df_page = df.iloc[start_idx:end_idx]
+        
+        cols = list(df.columns)
+        self.tree_single_data["columns"] = cols
+        for c in cols:
+            self.tree_single_data.heading(c, text=c)
+            self.tree_single_data.column(c, width=120, anchor="center")
+            
+        for row in df_page.itertuples(index=False):
+            vals = [f"{v:.1f}" if isinstance(v, float) else str(v) for v in row]
+            self.tree_single_data.insert("", "end", values=vals)
+            
+        self.lbl_single_page_info.configure(text=f"Página {self.single_page_index + 1} de {max_pages} ({start_idx + 1}-{end_idx} de {total_rows:,} registros)")
+        
+        self.btn_single_prev.configure(state="normal" if self.single_page_index > 0 else "disabled")
+        self.btn_single_next.configure(state="normal" if self.single_page_index < max_pages - 1 else "disabled")
+
+    def _on_export_single_excel(self):
+        if not self.single_analysis_res:
+            messagebox.showwarning("Sin Datos", "Ejecute primero el análisis de un archivo.")
+            return
+        try:
+            path_salida = filedialog.asksaveasfilename(
+                title="Guardar Análisis Excel",
+                defaultextension=".xlsx",
+                filetypes=[("Archivo Excel", "*.xlsx")],
+                initialfile=f"Analisis_{self.single_analysis_res['file_name']}.xlsx"
+            )
+            if path_salida:
+                final_file = exportar_analisis_excel(self.single_analysis_res, path_salida)
+                messagebox.showinfo("Exportación Exitosa", f"El informe de análisis Excel se guardó correctamente en:\n{final_file}")
+        except Exception as e:
+            messagebox.showerror("Error al Exportar", f"Error al generar archivo Excel:\n{e}")
+
+    def _on_export_single_txt(self):
+        if not self.single_analysis_res:
+            messagebox.showwarning("Sin Datos", "Ejecute primero el análisis de un archivo.")
+            return
+        try:
+            path_salida = filedialog.asksaveasfilename(
+                title="Guardar Reporte TXT",
+                defaultextension=".txt",
+                filetypes=[("Archivo de Texto", "*.txt")],
+                initialfile=f"Reporte_{self.single_analysis_res['file_name']}.txt"
+            )
+            if path_salida:
+                exportar_analisis_txt(self.single_analysis_res, path_salida)
+                messagebox.showinfo("Exportación Exitosa", f"El reporte TXT se guardó correctamente en:\n{path_salida}")
+        except Exception as e:
+            messagebox.showerror("Error al Exportar", f"Error al generar archivo TXT:\n{e}")
+
+    def _on_export_single_csv(self):
+        if not self.single_analysis_res or self.single_analysis_res["df_data"].empty:
+            messagebox.showwarning("Sin Datos", "Ejecute primero el análisis de un archivo.")
+            return
+        try:
+            path_salida = filedialog.asksaveasfilename(
+                title="Guardar CSV Limpio",
+                defaultextension=".csv",
+                filetypes=[("Archivo CSV", "*.csv")],
+                initialfile=f"Clean_{self.single_analysis_res['file_name']}.csv"
+            )
+            if path_salida:
+                self.single_analysis_res["df_data"].to_csv(path_salida, index=False, encoding="utf-8")
+                messagebox.showinfo("Exportación Exitosa", f"El archivo CSV limpio se guardó correctamente en:\n{path_salida}")
+        except Exception as e:
+            messagebox.showerror("Error al Exportar", f"Error al generar archivo CSV:\n{e}")
+        self.lbl_bottom_status.pack(side="left", padx=10)
+
 
     # ──────────────────────────────────────────────────────────────────────────
-    # PANEL 2: COMPARADOR UNIFICADO (INDIVIDUAL Y QC)
+    # PANEL 3: COMPARADOR UNIFICADO (INDIVIDUAL Y QC)
     # ──────────────────────────────────────────────────────────────────────────
     def _build_screen_comparador(self):
         f = self.frames["comparador"]
@@ -568,7 +954,7 @@ class App(ctk.CTk):
         self.comp_mode_var = ctk.StringVar(value="Individual XPS")
         self.segmented_selector = ctk.CTkSegmentedButton(
             selector_card,
-            values=["Individual SPS", "Individual RPS", "Individual XPS", "Paquete diario (QC)"],
+            values=["Comparador de SPS", "Comparador de RPS", "Comparador de XPS", "Conparador diario (QC)"],
             font=FONT_BOLD, height=36,
             command=self._on_comp_mode_changed
         )
@@ -865,7 +1251,7 @@ class App(ctk.CTk):
         self.folders_list.clear()
 
     # ──────────────────────────────────────────────────────────────────────────
-    # PANEL 3: ANALIZADOR BOOM BOX (MULTIPLE ARCHIVO)
+    # PANEL 4: ANALIZADOR BOOM BOX (MULTIPLE ARCHIVO)
     # ──────────────────────────────────────────────────────────────────────────
     def _build_screen_boombox(self):
         f = self.frames["boombox"]
@@ -1002,7 +1388,7 @@ class App(ctk.CTk):
 
 
     # ──────────────────────────────────────────────────────────────────────────
-    # PANEL 4: GENERACIÓN DE MAPAS
+    # PANEL 5: GENERACIÓN DE MAPAS
     # ──────────────────────────────────────────────────────────────────────────
     def _build_screen_mapas(self):
         f = self.frames["mapas"]
@@ -1067,7 +1453,7 @@ class App(ctk.CTk):
         self.lbl_estado_map.pack(side="left")
 
     # ──────────────────────────────────────────────────────────────────────────
-    # PANEL 5: CONFIGURACIÓN Y TEMAS
+    # PANEL 6: CONFIGURACIÓN Y TEMAS
     # ──────────────────────────────────────────────────────────────────────────
     def _build_screen_config(self):
         f = self.frames["config"]

@@ -6,40 +6,40 @@ import os
 import re
 from collections import defaultdict
 
-# Definición de encabezados estándar SPS para RPS (con rangos de columnas)
+# Definición de encabezados estándar SPS para RPS (con rangos de columnas SPS 2.1)
 ENCABEZADOS_RPS = {
-    'linea': 'Línea (2-17)',
-    'punto': 'Punto/Estaca (18-25)',
+    'linea': 'Línea Receptora (2-17)',
+    'punto': 'Estaca / Receptor (18-25)',
     'x': 'Coordenada X (Este) (47-55)',
     'y': 'Coordenada Y (Norte) (56-65)',
     'elevacion': 'Elevación Z (66-71)'
 }
 
 ENCABEZADOS_SPS = {
-    'linea': 'Línea de Fuente (2-17)',
-    'punto': 'Punto de Fuente (18-25)',
+    'linea': 'Línea Fuente (2-17)',
+    'punto': 'Punto Fuente (18-25)',
     'x': 'Coordenada X (Este) (47-55)',
     'y': 'Coordenada Y (Norte) (56-65)',
     'elevacion': 'Elevación Z (66-71)'
 }
 
 ENCABEZADOS_XPS = {
-    'reel': 'Carrete/Reel (2-7)',
-    'evento': 'Evento (8-17)',
+    'reel': 'Carrete / Tape (2-7)',
+    'evento': 'Evento / FFID (8-17)',
     'linea_f': 'Línea Fuente (18-27)',
-    'punto_f': 'Punto Fuente (28-35)',
-    'punto_f_idx': 'Índice Fuente (36)',
-    'desde': 'Desde Canal (37-41)',
-    'hasta': 'Hasta Canal (42-47)',
-    'incremento': 'Incremento (48)',
-    'linea_r': 'Línea Receptora (49-59)',
-    'punto_r': 'Punto Receptor (60-67)',
-    'punto_r_idx': 'Índice Receptor (68)',
-    'estatico_f': 'Estático Fuente (69-72)',
-    'estatico_r': 'Estático Receptor (73-76)'
+    'punto_f': 'Punto Fuente (28-37)',
+    'punto_f_idx': 'Índice Fuente (38)',
+    'desde': 'Canal Desde (39-43)',
+    'hasta': 'Canal Hasta (44-48)',
+    'incremento': 'Incremento Canal (49)',
+    'linea_r': 'Línea Receptora (50-59)',
+    'punto_r': 'Punto Receptor (60-69)',
+    'punto_r_idx': 'Índice Receptor (70)',
+    'estatico_f': 'Estático Fuente (71-75)',
+    'estatico_r': 'Estático Receptor (76-80)'
 }
 
-# Columnas estándar para SPS/RPS
+# Columnas estándar para SPS/RPS/XPS
 COLUMNAS_RPS = ['linea', 'punto', 'x', 'y', 'elevacion']
 COLUMNAS_XPS = [
     'reel', 'evento', 'linea_f', 'punto_f', 'punto_f_idx', 
@@ -49,7 +49,7 @@ COLUMNAS_XPS = [
 
 def leer_sps_rps(ruta, tipo):
     """
-    Lee archivo SPS/RPS usando slicing exacto por posiciones.
+    Lee archivo SPS/RPS usando slicing exacto optimizado a alto rendimiento (Nivel Sr.).
     Siempre devuelve un DataFrame con las columnas ['linea', 'punto', 'x', 'y', 'elevacion'].
     """
     if not ruta or not os.path.exists(ruta):
@@ -58,61 +58,23 @@ def leer_sps_rps(ruta, tipo):
     datos = []
     with open(ruta, 'r', encoding='utf-8-sig', errors='ignore') as f:
         for linea in f:
-            linea_limpia = linea.rstrip('\n\r')
-            if not linea_limpia or len(linea_limpia) < 71:
-                continue
-            
-            # Saltar líneas de encabezado (empiezan con H)
-            if linea_limpia.startswith('H'):
-                continue
-            
-            # Saltar líneas que no empiezan con el tipo solicitado (R o S)
-            if not linea_limpia.startswith(tipo):
-                continue
-            
-            try:
-                # Extraer por posiciones exactas (1-based → 0-based)
-                # Línea: col 2-11 (índice 1-11)
-                linea_str = linea_limpia[1:11].strip()
-                # Punto/Estaca: col 12-21 (índice 11-21)
-                punto_str = linea_limpia[11:21].strip()
-                # Coordenada X: col 47-55 (índice 46-55)
-                x_str = linea_limpia[46:55].strip()
-                # Coordenada Y: col 56-65 (índice 55-65)
-                y_str = linea_limpia[55:65].strip()
-                # Elevación Z: col 66-71 (índice 65-71)
-                elev_str = linea_limpia[65:71].strip()
-                
-                # Convertir de manera robusta
+            if len(linea) >= 71 and linea[0] == tipo:
                 try:
-                    linea_val = int(float(linea_str)) if linea_str else 0
-                except ValueError:
-                    linea_val = 0
+                    l_str = linea[1:11]
+                    p_str = linea[11:21]
+                    x_str = linea[46:55]
+                    y_str = linea[55:65]
+                    z_str = linea[65:71]
                     
-                try:
-                    punto_val = int(float(punto_str)) if punto_str else 0
-                except ValueError:
-                    punto_val = 0
+                    linea_val = int(float(l_str)) if l_str.strip() else 0
+                    punto_val = int(float(p_str)) if p_str.strip() else 0
+                    x_val = float(x_str) if x_str.strip() else 0.0
+                    y_val = float(y_str) if y_str.strip() else 0.0
+                    z_val = float(z_str) if z_str.strip() else 0.0
                     
-                try:
-                    x_val = float(x_str) if x_str else 0.0
-                except ValueError:
-                    x_val = 0.0
-                    
-                try:
-                    y_val = float(y_str) if y_str else 0.0
-                except ValueError:
-                    y_val = 0.0
-                    
-                try:
-                    elev_val = float(elev_str) if elev_str else 0.0
-                except ValueError:
-                    elev_val = 0.0
-                
-                datos.append([linea_val, punto_val, x_val, y_val, elev_val])
-            except (ValueError, IndexError):
-                # Si falla una línea, la saltamos
-                continue
+                    datos.append((linea_val, punto_val, x_val, y_val, z_val))
+                except (ValueError, IndexError):
+                    continue
     
     if datos:
         return pd.DataFrame(datos, columns=COLUMNAS_RPS)
@@ -120,7 +82,7 @@ def leer_sps_rps(ruta, tipo):
 
 def leer_xps_completo(ruta):
     """
-    Lee archivo XPS usando slicing exacto por posiciones.
+    Lee archivo XPS usando slicing exacto SPS 2.1 corregido a alto rendimiento (Nivel Sr.).
     Devuelve un DataFrame con todas las columnas detalladas de la relación.
     """
     if not ruta or not os.path.exists(ruta):
@@ -129,60 +91,45 @@ def leer_xps_completo(ruta):
     datos = []
     with open(ruta, 'r', encoding='utf-8-sig', errors='ignore') as f:
         for linea in f:
-            linea_limpia = linea.rstrip('\n\r')
-            if not linea_limpia or len(linea_limpia) < 70:
-                continue
-            
-            # Saltar líneas de encabezado (empiezan con H)
-            if linea_limpia.startswith('H'):
-                continue
-            
-            # Saltar líneas que no empiezan con X
-            if not linea_limpia.startswith('X'):
-                continue
-            
-            try:
-                # Extraer por posiciones exactas corregidas (1-based → 0-based)
-                reel_str = linea_limpia[1:7].strip()
-                event_str = linea_limpia[7:17].strip()
-                linea_f_str = linea_limpia[17:27].strip()
-                punto_f_str = linea_limpia[27:37].strip()
-                punto_f_idx_str = linea_limpia[37:38].strip()
-                desde_str = linea_limpia[36:41].strip()
-                hasta_str = linea_limpia[41:46].strip()
-                inc_str = linea_limpia[46:47].strip()
-                linea_r_str = linea_limpia[47:59].strip()
-                punto_r_str = linea_limpia[59:69].strip()
-                punto_r_idx_str = linea_limpia[69:70].strip()
-                
-                # Campos opcionales de correcciones estáticas
-                static_f_str = linea_limpia[70:75].strip() if len(linea_limpia) >= 75 else ""
-                static_r_str = linea_limpia[75:80].strip() if len(linea_limpia) >= 80 else ""
-                
-                # Convertir a enteros de manera robusta
-                reel_val = int(reel_str) if reel_str and reel_str.replace('-', '').isdigit() else 0
-                event_val = int(event_str) if event_str and event_str.replace('-', '').isdigit() else 0
-                linea_f_val = int(linea_f_str) if linea_f_str and linea_f_str.replace('-', '').isdigit() else 0
-                punto_f_val = int(punto_f_str) if punto_f_str and punto_f_str.replace('-', '').isdigit() else 0
-                punto_f_idx_val = int(punto_f_idx_str) if punto_f_idx_str and punto_f_idx_str.replace('-', '').isdigit() else 0
-                desde_val = int(desde_str) if desde_str and desde_str.replace('-', '').isdigit() else 0
-                hasta_val = int(hasta_str) if hasta_str and hasta_str.replace('-', '').isdigit() else 0
-                inc_val = int(inc_str) if inc_str and inc_str.replace('-', '').isdigit() else 0
-                linea_r_val = int(linea_r_str) if linea_r_str and linea_r_str.replace('-', '').isdigit() else 0
-                punto_r_val = int(punto_r_str) if punto_r_str and punto_r_str.replace('-', '').isdigit() else 0
-                punto_r_idx_val = int(punto_r_idx_str) if punto_r_idx_str and punto_r_idx_str.replace('-', '').isdigit() else 0
-                
-                static_f_val = int(static_f_str) if static_f_str and static_f_str.replace('-', '').isdigit() else 0
-                static_r_val = int(static_r_str) if static_r_str and static_r_str.replace('-', '').isdigit() else 0
-                
-                datos.append([
-                    reel_val, event_val, linea_f_val, punto_f_val, punto_f_idx_val,
-                    desde_val, hasta_val, inc_val, linea_r_val, punto_r_val,
-                    punto_r_idx_val, static_f_val, static_r_val
-                ])
-            except (ValueError, IndexError):
-                # Si falla una línea, la saltamos
-                continue
+            if len(linea) >= 70 and linea[0] == 'X':
+                try:
+                    reel_s = linea[1:7]
+                    ev_s   = linea[7:17]
+                    lf_s   = linea[17:27]
+                    pf_s   = linea[27:37]
+                    pfi_s  = linea[37:38]
+                    des_s  = linea[38:43]
+                    has_s  = linea[43:48]
+                    inc_s  = linea[48:49]
+                    lr_s   = linea[49:59]
+                    pr_s   = linea[59:69]
+                    pri_s  = linea[69:70]
+                    
+                    stf_s  = linea[70:75] if len(linea) >= 75 else ""
+                    str_s  = linea[75:80] if len(linea) >= 80 else ""
+                    
+                    reel_val  = int(float(reel_s)) if reel_s.strip() else 0
+                    event_val = int(float(ev_s))   if ev_s.strip()   else 0
+                    linea_f_val = int(float(lf_s)) if lf_s.strip()   else 0
+                    punto_f_val = int(float(pf_s)) if pf_s.strip()   else 0
+                    punto_f_idx_val = int(float(pfi_s)) if pfi_s.strip() else 0
+                    desde_val = int(float(des_s)) if des_s.strip()  else 0
+                    hasta_val = int(float(has_s)) if has_s.strip()  else 0
+                    inc_val   = int(float(inc_s)) if inc_s.strip()  else 0
+                    linea_r_val = int(float(lr_s)) if lr_s.strip()   else 0
+                    punto_r_val = int(float(pr_s)) if pr_s.strip()   else 0
+                    punto_r_idx_val = int(float(pri_s)) if pri_s.strip() else 0
+                    
+                    static_f_val = int(float(stf_s)) if stf_s.strip() else 0
+                    static_r_val = int(float(str_s)) if str_s.strip() else 0
+                    
+                    datos.append((
+                        reel_val, event_val, linea_f_val, punto_f_val, punto_f_idx_val,
+                        desde_val, hasta_val, inc_val, linea_r_val, punto_r_val,
+                        punto_r_idx_val, static_f_val, static_r_val
+                    ))
+                except (ValueError, IndexError):
+                    continue
     
     if datos:
         return pd.DataFrame(datos, columns=COLUMNAS_XPS)
@@ -197,18 +144,19 @@ def detectar_tipo_sps_rps(ruta):
             for i, linea in enumerate(f):
                 if i > 1000:
                     break
-                linea_limpia = linea.strip()
-                if linea_limpia.startswith('R'):
-                    count_r += 1
-                elif linea_limpia.startswith('S'):
-                    count_s += 1
+                if len(linea) > 0:
+                    ch = linea[0]
+                    if ch == 'R':
+                        count_r += 1
+                    elif ch == 'S':
+                        count_s += 1
             if count_r > count_s:
                 return 'R'
             elif count_s > count_r:
                 return 'S'
             else:
                 return None
-    except:
+    except Exception:
         return None
 
 def leer_xps_intervalos_fuente(ruta):
@@ -223,31 +171,23 @@ def leer_xps_intervalos_fuente(ruta):
     
     with open(ruta, 'r', encoding='utf-8-sig', errors='ignore') as f:
         for linea in f:
-            linea_limpia = linea.rstrip('\n\r')
-            if not linea_limpia or len(linea_limpia) < 70:
-                continue
-            if linea_limpia.startswith('H'):
-                continue
-            if not linea_limpia.startswith('X'):
-                continue
-            
-            try:
-                # Extraer por posiciones exactas corregidas
-                linea_f_str = linea_limpia[17:27].strip()
-                punto_f_str = linea_limpia[27:37].strip()  # excluir índice de punto
-                linea_r_str = linea_limpia[47:59].strip()
-                desde_str = linea_limpia[36:41].strip()
-                hasta_str = linea_limpia[41:46].strip()
-                
-                linea_f = int(linea_f_str) if linea_f_str and linea_f_str.replace('-', '').isdigit() else 0
-                punto_f = int(punto_f_str) if punto_f_str and punto_f_str.replace('-', '').isdigit() else 0
-                linea_r = int(linea_r_str) if linea_r_str and linea_r_str.replace('-', '').isdigit() else 0
-                desde = int(desde_str) if desde_str and desde_str.replace('-', '').isdigit() else 0
-                hasta = int(hasta_str) if hasta_str and hasta_str.replace('-', '').isdigit() else 0
-                
-                intervalos_fuente[(linea_f, punto_f)].append((linea_r, desde, hasta))
-            except (ValueError, IndexError):
-                continue
+            if len(linea) >= 70 and linea[0] == 'X':
+                try:
+                    lf_s  = linea[17:27]
+                    pf_s  = linea[27:37]
+                    lr_s  = linea[49:59]
+                    des_s = linea[38:43]
+                    has_s = linea[43:48]
+                    
+                    linea_f = int(float(lf_s)) if lf_s.strip() else 0
+                    punto_f = int(float(pf_s)) if pf_s.strip() else 0
+                    linea_r = int(float(lr_s)) if lr_s.strip() else 0
+                    desde   = int(float(des_s)) if des_s.strip() else 0
+                    hasta   = int(float(has_s)) if has_s.strip() else 0
+                    
+                    intervalos_fuente[(linea_f, punto_f)].append((linea_r, desde, hasta))
+                except (ValueError, IndexError):
+                    continue
     
     return dict(intervalos_fuente)
 
