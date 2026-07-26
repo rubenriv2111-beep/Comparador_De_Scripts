@@ -49,7 +49,7 @@ def detectar_tipo_archivo_individual(path):
                     count_x += 1
                     
             counts = {"RPS": count_r, "SPS": count_s, "XPS": count_x}
-            max_type = max(counts, key=counts.get)
+            max_type = max(counts, key=counts.get) # type: ignore
             if counts[max_type] > 0:
                 return max_type
     except Exception:
